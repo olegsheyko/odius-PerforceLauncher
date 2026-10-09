@@ -4,9 +4,14 @@
 запускает редактор и IDE, управляет pending changes и показывает историю — для нескольких проектов/воркспейсов.
 
 ## Установка
-Скачать **`PerforceLauncher-win-Setup.exe`** из [последнего релиза](https://github.com/olegsheyko/odius-PerforceLauncher/releases/latest)
-и запустить. Права администратора и .NET ставить не нужно. Понадобится только `p4.exe`
+Скачать **`Install-PerforceLauncher.exe`** из [последнего релиза](https://github.com/olegsheyko/odius-PerforceLauncher/releases/latest)
+и запустить. В установщике можно выбрать папку (по умолчанию `%LocalAppData%\PerforceLauncher`); подойдёт любая
+папка, куда у вас есть права на запись, кроме Program Files — там обновления требовали бы прав администратора.
+Права администратора и .NET ставить не нужно. Понадобится только `p4.exe`
 (ставится вместе с P4V или как Helix Command-Line Client).
+
+`PerforceLauncher-win-Setup.exe` из того же релиза — установка в один клик без выбора папки
+(то же самое можно сделать из командной строки: `PerforceLauncher-win-Setup.exe --installto "D:\Tools\PerforceLauncher"`).
 
 Windows может показать «Windows защитила ваш компьютер» (установщик не подписан): **Подробнее → Выполнить в любом случае**.
 

@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Оболочка установщика с выбором папки. .NET Framework 4.8 встроен в Windows 10/11, поэтому
+    установщику не нужна никакая среда выполнения. Внутрь вшивается Velopack Setup.exe (CI передаёт
+    путь через -p:VelopackSetup=...); без него сборка тоже проходит (для разработки UI).
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <AssemblyName>Install-PerforceLauncher</AssemblyName>
+    <RootNamespace>PerforceLauncher.Installer</RootNamespace>
+    <ApplicationIcon>..\Launcher.App\Assets\app.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Version>1.0.0</Version>
+    <Product>Perforce Launcher</Product>
+    <Company>ODIUS</Company>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="..\Launcher.App\Assets\app.ico" LogicalName="app.ico" />
+    <EmbeddedResource Include="$(VelopackSetup)" LogicalName="VelopackSetup.exe" Condition="'$(VelopackSetup)' != ''" />
+  </ItemGroup>
+</Project>

@@ -45,8 +45,19 @@ jobs:
           --packDir publish --mainExe PerforceLauncher.exe --packTitle "Perforce Launcher" --packAuthors ODIUS
           --icon src/Launcher.App/Assets/app.ico -o releases
 
+      - name: Build installer with folder choice (wraps Velopack Setup)
+        run: >
+          dotnet build src/Launcher.Installer/Launcher.Installer.csproj -c Release
+          -p:VelopackSetup=${{ github.workspace }}\releases\PerforceLauncher-win-Setup.exe
+          -p:Version=${{ steps.ver.outputs.version }} -o installer
+
       - name: Publish GitHub release
         run: >
           dotnet vpk upload github --repoUrl ${{ github.server_url }}/${{ github.repository }}
           --token ${{ secrets.GITHUB_TOKEN }} -o releases --publish
           --releaseName "Perforce Launcher ${{ steps.ver.outputs.version }}" --tag ${{ github.ref_name }}
+
+      - name: Attach the installer to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload ${{ github.ref_name }} installer/Install-PerforceLauncher.exe --clobber

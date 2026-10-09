@@ -87,11 +87,59 @@ public partial class App : Application
         if (settings.StartWithWindows)
             try { AutostartManager.RefreshCommand(settings.StartMinimized); } catch { /* не критично */ }
 
+        SetUpUpdates(vm, dialogs, () => { _window.SavePlacement(); store.Save(settings); });
+
         _watcher.Start();
         _ = vm.StartupReminderAsync();
 
         // Автозапуск с Windows передаёт --tray: окно не показываем, лаунчер сидит в трее.
         if (!fromAutostart) _window.Show();
+    }
+
+    /// <summary>
+    /// Автообновление: проверка через 45 с после старта и каждые 4 ч. Скачанная версия ставится сама в «тихий момент»
+    /// (окно скрыто в трей и ничего не выполняется) с перезапуском обратно в трей; иначе — уведомление и пункт меню.
+    /// </summary>
+    private void SetUpUpdates(MainViewModel vm, DialogService dialogs, Action saveState)
+    {
+        var updater = new AppUpdater();
+        dialogs.Updater = updater;
+        if (!updater.IsInstalled) return;   // сборка из dist\ или из IDE: обновления не применяются
+
+        void Restart(bool toTray)
+        {
+            saveState();
+            _tray!.Hide();   // иначе в трее остаётся «призрак» старой иконки
+            try { updater.ApplyAndRestart(toTray); }
+            catch { _tray.Show(); throw; }
+        }
+        bool TryApplyQuietly()
+        {
+            if (updater.ReadyVersion == null || _window!.IsVisible || vm.IsBusy) return false;
+            Restart(toTray: true);
+            return true;
+        }
+
+        dialogs.RestartToUpdate = () => Restart(toTray: false);
+        _tray!.UpdateRequested += () => Restart(toTray: _window?.IsVisible != true);
+        updater.UpdateReady += version => Dispatcher.BeginInvoke(new Action(() =>
+        {
+            _tray.SetUpdateReady(version);
+            if (!TryApplyQuietly())
+                _tray.Notify("Perforce Launcher update ready",
+                    $"Version {version} is downloaded. It installs automatically when the window is hidden to the tray, or use Restart to Update.");
+        }));
+        // Окно ушло в трей — подходящий момент поставить уже скачанное обновление.
+        _window!.IsVisibleChanged += (_, _) => TryApplyQuietly();
+
+        var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(45) };
+        timer.Tick += async (_, _) =>
+        {
+            timer.Interval = TimeSpan.FromHours(4);
+            try { await updater.CheckAndDownloadAsync(); }
+            catch { /* нет сети или GitHub недоступен — попробуем в следующий раз */ }
+        };
+        timer.Start();
     }
 
     /// <summary>Второй экземпляр сигналит именованным событием (в пределах сессии пользователя) — показываем окно.</summary>

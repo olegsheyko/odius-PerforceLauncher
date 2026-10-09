@@ -16,6 +16,10 @@ public sealed class DialogService : IDialogService
     private readonly IVersionControl _vcs;
     private readonly SessionKeeper? _session;
     public Window? Owner { get; set; }
+    /// <summary>Автообновление (задаётся приложением); null — раздел Updates показывает только версию.</summary>
+    public PerforceLauncher.App.Infrastructure.AppUpdater? Updater { get; set; }
+    /// <summary>Сохранить состояние, установить скачанное обновление и перезапуститься.</summary>
+    public Action? RestartToUpdate { get; set; }
 
     public DialogService(IVersionControl vcs, SessionKeeper? session = null)
     {
@@ -133,6 +137,44 @@ public sealed class DialogService : IDialogService
             forget.IsEnabled = false;
         };
 
+        // Версия и обновления.
+        var installed = Updater?.IsInstalled == true;
+        var version = Updater?.CurrentVersion ?? "dev";
+        var updateText = new TextBlock
+        {
+            Text = installed
+                ? $"Version {version}. Updates download from GitHub and install automatically."
+                : $"Version {version}, development build. Automatic updates work in the installed version.",
+            TextWrapping = TextWrapping.Wrap, MaxWidth = 470, HorizontalAlignment = HorizontalAlignment.Left,
+            Foreground = (Brush)app.FindResource("TextSecondary"), Margin = new Thickness(0, 0, 0, 8),
+        };
+        var checkUpdates = new Button { Content = "Check for Updates", Padding = new Thickness(12, 5, 12, 5), IsEnabled = installed, Margin = new Thickness(0, 0, 8, 0) };
+        var restart = new Button
+        {
+            Content = "Restart to Update", Padding = new Thickness(12, 5, 12, 5),
+            Style = (Style)app.FindResource("PrimaryButton"),
+            Visibility = Updater?.ReadyVersion != null ? Visibility.Visible : Visibility.Collapsed,
+        };
+        if (Updater?.ReadyVersion is { } readyNow) updateText.Text = $"Version {readyNow} is downloaded and ready to install (current: {version}).";
+        checkUpdates.Click += async (_, _) =>
+        {
+            if (Updater == null) return;
+            checkUpdates.IsEnabled = false;
+            updateText.Text = "Checking for updates…";
+            try
+            {
+                var ready = await Updater.CheckAndDownloadAsync();
+                updateText.Text = ready == null
+                    ? $"You're up to date (version {version})."
+                    : $"Version {ready} is downloaded and ready to install (current: {version}).";
+                if (ready != null) restart.Visibility = Visibility.Visible;
+            }
+            catch (Exception ex) { updateText.Text = "Couldn't check for updates: " + ex.Message.Split('\n')[0]; }
+            finally { checkUpdates.IsEnabled = true; }
+        };
+        restart.Click += (_, _) => RestartToUpdate?.Invoke();
+        var updateButtons = new StackPanel { Orientation = Orientation.Horizontal, Children = { checkUpdates, restart } };
+
         var ok = new Button { Content = "Save", IsDefault = true, Margin = new Thickness(0, 0, 8, 0), Padding = new Thickness(14, 6, 14, 6) };
         var cancel = new Button { Content = "Cancel", IsCancel = true, Padding = new Thickness(14, 6, 14, 6) };
         var buttons = new StackPanel
@@ -151,12 +193,16 @@ public sealed class DialogService : IDialogService
                 Section("PERFORCE"), new TextBlock { Text = "Path to p4.exe", Margin = new Thickness(0, 0, 0, 6) }, p4,
                 p4Note, set, Note("So P4V and Unreal Editor use the same workspace."),
                 Section("SAVED SIGN-IN"), savedText, forget,
+                Section("UPDATES"), updateText, updateButtons,
                 buttons,
             },
         };
         var win = new Window
         {
-            Title = "Settings", Content = panel, SizeToContent = SizeToContent.WidthAndHeight,
+            // На невысоких экранах (ноутбуки) настройки прокручиваются, а не обрезаются.
+            Title = "Settings", SizeToContent = SizeToContent.WidthAndHeight,
+            MaxHeight = SystemParameters.WorkArea.Height - 40,
+            Content = new ScrollViewer { Content = panel, VerticalScrollBarVisibility = ScrollBarVisibility.Auto },
             WindowStartupLocation = WindowStartupLocation.CenterOwner, Owner = Owner, ResizeMode = ResizeMode.NoResize,
         };
         ok.Click += (_, _) => win.DialogResult = true;
@@ -196,7 +242,8 @@ public sealed class DialogService : IDialogService
     {
         w.Style = (Style)Application.Current.FindResource("AppWindow");
         // Первая кнопка нижней панели (Login/Save/Submit) — основная, с акцентом.
-        if (w.Content is StackPanel root && root.Children.OfType<StackPanel>().LastOrDefault() is { } bar
+        var content = w.Content is ScrollViewer sv ? sv.Content : w.Content;
+        if (content is StackPanel root && root.Children.OfType<StackPanel>().LastOrDefault() is { } bar
             && bar.Children.OfType<Button>().FirstOrDefault() is { } ok)
             ok.Style = (Style)Application.Current.FindResource("PrimaryButton");
         w.Icon = new System.Windows.Media.Imaging.BitmapImage(new System.Uri("pack://application:,,,/PerforceLauncher;component/Assets/app.ico"));

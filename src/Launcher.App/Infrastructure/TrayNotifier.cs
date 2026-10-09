@@ -18,6 +18,19 @@ public sealed class TrayNotifier : INotifier, IDisposable
     public event Action? CheckAllRequested;
     public event Action<Guid>? LaunchRequested;
     public event Action? ExitRequested;
+    public event Action? UpdateRequested;
+
+    private string? _updateVersion;
+
+    /// <summary>Скачанное обновление: в меню появляется «Restart to Update».</summary>
+    public void SetUpdateReady(string version)
+    {
+        _updateVersion = version;
+        BuildMenu();
+    }
+
+    public void Hide() => _icon.Visible = false;
+    public void Show() => _icon.Visible = true;
 
     public TrayNotifier()
     {
@@ -52,6 +65,8 @@ public sealed class TrayNotifier : INotifier, IDisposable
             Font = new Font(_menu.Font, FontStyle.Bold),
         };
         _menu.Items.Add(open);
+        if (_updateVersion != null)
+            _menu.Items.Add($"Restart to Update ({_updateVersion})", null, (_, _) => UpdateRequested?.Invoke());
         if (_projects.Count > 0)
         {
             var launch = new ToolStripMenuItem("Launch Unreal");

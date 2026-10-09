@@ -1,0 +1,52 @@
+# Сборка установщика и публикация релиза: git tag v1.2.3 && git push origin v1.2.3
+# Установленные лаунчеры сами подхватывают новый релиз (Velopack, GitHub Releases).
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write   # создать релиз и загрузить файлы
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Version from tag
+        id: ver
+        shell: pwsh
+        run: |
+          $v = '${{ github.ref_name }}'.TrimStart('v')
+          if ($v -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') { throw "Tag must look like v1.2.3, got '${{ github.ref_name }}'" }
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Restore tools (vpk)
+        run: dotnet tool restore
+
+      - name: Publish (self-contained, no .NET install needed on user machines)
+        run: >
+          dotnet publish src/Launcher.App/Launcher.App.csproj -c Release -r win-x64 --self-contained true
+          -p:Version=${{ steps.ver.outputs.version }} -o publish
+
+      - name: Download previous release (enables small delta updates)
+        continue-on-error: true   # первого релиза ещё нет
+        run: dotnet vpk download github --repoUrl ${{ github.server_url }}/${{ github.repository }} --token ${{ secrets.GITHUB_TOKEN }} -o releases
+
+      - name: Pack installer
+        run: >
+          dotnet vpk pack --packId PerforceLauncher --packVersion ${{ steps.ver.outputs.version }}
+          --packDir publish --mainExe PerforceLauncher.exe --packTitle "Perforce Launcher" --packAuthors ODIUS
+          --icon src/Launcher.App/Assets/app.ico -o releases
+
+      - name: Publish GitHub release
+        run: >
+          dotnet vpk upload github --repoUrl ${{ github.server_url }}/${{ github.repository }}
+          --token ${{ secrets.GITHUB_TOKEN }} -o releases --publish
+          --releaseName "Perforce Launcher ${{ steps.ver.outputs.version }}" --tag ${{ github.ref_name }}

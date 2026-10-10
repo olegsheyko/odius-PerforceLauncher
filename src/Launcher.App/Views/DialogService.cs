@@ -156,11 +156,19 @@ public sealed class DialogService : IDialogService
             Visibility = Updater?.ReadyVersion != null ? Visibility.Visible : Visibility.Collapsed,
         };
         if (Updater?.ReadyVersion is { } readyNow) updateText.Text = $"Version {readyNow} is downloaded and ready to install (current: {version}).";
+        // Прогресс загрузки (событие из фонового потока). Показываем и уже идущую фоновую загрузку.
+        void ShowProgress(string v, int percent) => updateText.Dispatcher.BeginInvoke(new Action(() =>
+        {
+            // Запоздавшее событие после окончания загрузки не должно затирать итоговую надпись.
+            if (Updater?.DownloadingVersion != null) updateText.Text = $"Downloading version {v}… {percent}%";
+        }));
+        if (Updater?.DownloadingVersion is { } downloadingNow) updateText.Text = $"Downloading version {downloadingNow}… {Updater.DownloadPercent}%";
         checkUpdates.Click += async (_, _) =>
         {
             if (Updater == null) return;
             checkUpdates.IsEnabled = false;
-            updateText.Text = "Checking for updates…";
+            updateText.Text = Updater.DownloadingVersion is { } v ? $"Downloading version {v}… {Updater.DownloadPercent}%" : "Checking for updates…";
+            Updater.DownloadProgress += ShowProgress;
             try
             {
                 var ready = await Updater.CheckAndDownloadAsync();
@@ -170,7 +178,11 @@ public sealed class DialogService : IDialogService
                 if (ready != null) restart.Visibility = Visibility.Visible;
             }
             catch (Exception ex) { updateText.Text = "Couldn't check for updates: " + ex.Message.Split('\n')[0]; }
-            finally { checkUpdates.IsEnabled = true; }
+            finally
+            {
+                Updater.DownloadProgress -= ShowProgress;
+                checkUpdates.IsEnabled = true;
+            }
         };
         restart.Click += (_, _) => RestartToUpdate?.Invoke();
         var updateButtons = new StackPanel { Orientation = Orientation.Horizontal, Children = { checkUpdates, restart } };

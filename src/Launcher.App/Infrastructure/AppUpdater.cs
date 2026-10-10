@@ -35,16 +35,45 @@ public sealed class AppUpdater
 
     public string? ReadyVersion => _ready?.TargetFullRelease.Version.ToString();
 
-    /// <summary>Проверить и скачать. Возвращает версию готового обновления или null, если обновлений нет.</summary>
-    public async Task<string?> CheckAndDownloadAsync()
+    private Task<string?>? _inFlight;
+
+    /// <summary>Версия, которая сейчас скачивается, и прогресс 0–100 (события приходят из фонового потока).</summary>
+    public string? DownloadingVersion { get; private set; }
+    public int DownloadPercent { get; private set; }
+    public event Action<string, int>? DownloadProgress;
+
+    /// <summary>
+    /// Проверить и скачать. Возвращает версию готового обновления или null, если обновлений нет.
+    /// Если проверка/загрузка уже идёт (фоновая по таймеру или из Settings), возвращает ту же задачу:
+    /// две параллельные загрузки упирались в блокировку Velopack, и кнопка «Check for Updates» ничего не делала.
+    /// </summary>
+    public Task<string?> CheckAndDownloadAsync()
+    {
+        if (_inFlight is { IsCompleted: false }) return _inFlight;
+        return _inFlight = CheckAndDownloadCoreAsync();
+    }
+
+    private async Task<string?> CheckAndDownloadCoreAsync()
     {
         if (_manager == null || !IsInstalled) return null;
         if (_ready != null) return ReadyVersion;
         var info = await _manager.CheckForUpdatesAsync();
         if (info == null) return null;
-        await _manager.DownloadUpdatesAsync(info, null);
-        _ready = info;
+
         var version = info.TargetFullRelease.Version.ToString();
+        DownloadingVersion = version;
+        DownloadPercent = 0;
+        try
+        {
+            await _manager.DownloadUpdatesAsync(info, percent =>
+            {
+                DownloadPercent = percent;
+                DownloadProgress?.Invoke(version, percent);
+            });
+        }
+        finally { DownloadingVersion = null; }
+
+        _ready = info;
         UpdateReady?.Invoke(version);
         return version;
     }

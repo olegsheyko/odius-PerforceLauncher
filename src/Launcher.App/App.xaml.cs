@@ -83,11 +83,16 @@ public partial class App : Application
         };
         SystemEvents.PowerModeChanged += _powerHandler;
 
-        // Обновить путь в автозапуске, если exe переехал. Выключатель Диспетчера задач не трогаем.
-        if (settings.StartWithWindows)
-            try { AutostartManager.RefreshCommand(settings.StartMinimized); } catch { /* не критично */ }
+        var updater = new AppUpdater();
+        DiagLog.Write($"Started {updater.CurrentVersion} ({(updater.IsInstalled ? "installed" : "development build")}) from {Environment.ProcessPath}");
 
-        SetUpUpdates(vm, dialogs, () => { _window.SavePlacement(); store.Save(settings); });
+        // Автозапуск ведёт только установленная версия: направляет его на себя (exe мог переехать) и восстанавливает,
+        // если запись пропала при переустановке. Сборка для разработки автозапуск не трогает. Выключатель
+        // Диспетчера задач хранится отдельно и здесь не меняется.
+        if (settings.StartWithWindows && updater.IsInstalled)
+            try { AutostartManager.RefreshCommand(settings.StartMinimized, recreateIfMissing: true); } catch { /* не критично */ }
+
+        SetUpUpdates(updater, vm, dialogs, () => { _window.SavePlacement(); store.Save(settings); });
 
         _watcher.Start();
         _ = vm.StartupReminderAsync();
@@ -100,9 +105,8 @@ public partial class App : Application
     /// Автообновление: проверка через 45 с после старта и каждые 4 ч. Скачанная версия ставится сама в «тихий момент»
     /// (окно скрыто в трей и ничего не выполняется) с перезапуском обратно в трей; иначе — уведомление и пункт меню.
     /// </summary>
-    private void SetUpUpdates(MainViewModel vm, DialogService dialogs, Action saveState)
+    private void SetUpUpdates(AppUpdater updater, MainViewModel vm, DialogService dialogs, Action saveState)
     {
-        var updater = new AppUpdater();
         dialogs.Updater = updater;
         if (!updater.IsInstalled) return;   // сборка из dist\ или из IDE: обновления не применяются
 

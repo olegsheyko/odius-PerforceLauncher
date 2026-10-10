@@ -52,9 +52,17 @@ public sealed class SessionKeeper
         var target = await TargetForAsync(p, ct);
         _store.Save(target, AccountOf(target).Split('@')[0], password);
         _lastTicketCheck.Remove(target);
+        _reportedMissing.Remove(target);
+        DiagLog.Write($"Sign-in: password saved for {AccountOf(target)}; automatic sign-in enabled.");
     }
 
-    public async Task ForgetAsync(ProjectProfile p, CancellationToken ct = default) => _store.Delete(await TargetForAsync(p, ct));
+    public async Task ForgetAsync(ProjectProfile p, CancellationToken ct = default)
+    {
+        var target = await TargetForAsync(p, ct);
+        if (_store.Read(target) == null) return;
+        _store.Delete(target);
+        DiagLog.Write($"Sign-in: saved password for {AccountOf(target)} removed (signed in without 'Remember').");
+    }
 
     public IReadOnlyList<string> SavedAccounts() => _store.List(TargetPrefix).Select(AccountOf).ToList();
 
@@ -62,7 +70,11 @@ public sealed class SessionKeeper
     {
         foreach (var t in _store.List(TargetPrefix)) _store.Delete(t);
         _lastTicketCheck.Clear();
+        DiagLog.Write("Sign-in: all saved passwords removed (Settings → Forget Saved Passwords).");
     }
+
+    // Чтобы не писать в журнал «пароля нет» каждые 2 минуты, пока сессия истекла.
+    private readonly HashSet<string> _reportedMissing = new();
 
     /// <summary>Перед проверкой: продлить сессию заранее, если тикет скоро истечёт. Без сохранённых паролей — ничего не делает.</summary>
     public async Task EnsureFreshAsync(ProjectProfile p, CancellationToken ct = default)
@@ -86,7 +98,13 @@ public sealed class SessionKeeper
         try { target = await TargetForAsync(p, ct); }
         catch (P4Exception) { return false; }
         var password = _store.Read(target);
-        return password != null && await LoginWithSavedAsync(p, target, password, ct);
+        if (password == null)
+        {
+            if (_reportedMissing.Add(target))
+                DiagLog.Write($"Sign-in: session for {AccountOf(target)} expired, no saved password — automatic sign-in not possible.");
+            return false;
+        }
+        return await LoginWithSavedAsync(p, target, password, ct);
     }
 
     private async Task<bool> LoginWithSavedAsync(ProjectProfile p, string target, string password, CancellationToken ct)
@@ -100,6 +118,7 @@ public sealed class SessionKeeper
             {
                 await _vcs.LoginAsync(p, password, ct);
                 _lastTicketCheck[target] = DateTime.UtcNow;
+                DiagLog.Write($"Sign-in: session for {AccountOf(target)} renewed automatically.");
                 Renewed?.Invoke(AccountOf(target));
                 return true;
             }
@@ -107,11 +126,17 @@ public sealed class SessionKeeper
             {
                 // Пароль отвергнут (сменили, учётку заблокировали...). Больше не пробуем — удаляем.
                 _store.Delete(target);
+                DiagLog.Write($"Sign-in: saved password for {AccountOf(target)} rejected by server and removed: {ex.Message.Split('\n')[0]}");
                 PasswordRejected?.Invoke(AccountOf(target));
                 return false;
             }
         }
-        catch (P4Exception) { return false; }   // сеть недоступна: пароль сохраняем, попробуем позже
+        catch (P4Exception ex)
+        {
+            // сеть недоступна: пароль сохраняем, попробуем позже
+            DiagLog.Write($"Sign-in: renewal for {AccountOf(target)} postponed (server unreachable): {ex.Message.Split('\n')[0]}");
+            return false;
+        }
         finally { _gate.Release(); }
     }
 

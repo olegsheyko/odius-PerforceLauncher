@@ -14,14 +14,11 @@ public static class Program
         VelopackApp.Build()
             .OnBeforeUninstallFastCallback(_ =>
             {
-                // При удалении убираем за собой автозапуск и сохранённые пароли Perforce.
+                // Убираем автозапуск (иначе он указывал бы на удалённый exe). Сохранённые пароли НЕ трогаем:
+                // этот хук срабатывает и при переустановке поверх, и стирал пароль, ломая автовход.
+                // Удалить пароль можно в Settings → Forget Saved Passwords или в Диспетчере учётных данных.
                 try { AutostartManager.Apply(false); } catch { }
-                try
-                {
-                    var store = new WindowsCredentialStore();
-                    foreach (var target in store.List(SessionKeeper.TargetPrefix)) store.Delete(target);
-                }
-                catch { }
+                DiagLog.Write("Uninstall/reinstall: autostart entry removed (saved passwords kept).");
             })
             .SetAutoApplyOnStartup(true)   // скачанное обновление ставится при следующем запуске
             .Run();

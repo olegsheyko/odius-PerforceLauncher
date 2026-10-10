@@ -116,6 +116,8 @@ public sealed class ProfileViewModel : ObservableObject
     {
         get
         {
+            if (_error != null && _authRequired)
+                return "Session expired. Sign in once with \"Remember password\" and the launcher keeps you signed in.";
             if (_error != null)
             {
                 var first = _error.Split('\n')[0].Trim();

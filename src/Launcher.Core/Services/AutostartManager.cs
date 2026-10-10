@@ -55,10 +55,14 @@ public static class AutostartManager
     /// При старте: обновить путь/флаг --tray (exe могли переместить), не трогая выключатель Диспетчера задач —
     /// если пользователь отключил автозапуск там, мы его молча обратно не включаем.
     /// </summary>
-    public static void RefreshCommand(bool startMinimized, string? exePath = null)
+    public static void RefreshCommand(bool startMinimized, string? exePath = null, bool recreateIfMissing = false)
     {
-        using var run = Registry.CurrentUser.OpenSubKey(RunKey);
-        if (run?.GetValue(ValueName) is not string) return;
+        using (var run = Registry.CurrentUser.OpenSubKey(RunKey))
+        {
+            // Запись исчезла (например, её убрал хук удаления при переустановке), а в настройках автозапуск включён —
+            // восстанавливаем. Выключатель Диспетчера задач хранится отдельно и здесь не трогается.
+            if (run?.GetValue(ValueName) is not string && !recreateIfMissing) return;
+        }
         WriteCommand(startMinimized, exePath);
     }
 

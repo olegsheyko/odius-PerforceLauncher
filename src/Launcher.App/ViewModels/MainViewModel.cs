@@ -129,7 +129,51 @@ public sealed class MainViewModel : ObservableObject
     public ObservableCollection<PendingFileViewModel> PendingFiles { get; } = new();
     public IReadOnlyList<PendingChangelist> Changelists => _changelists;
     /// <summary>Выделенные строки списка; выставляется из code-behind.</summary>
-    public IReadOnlyList<PendingFileViewModel> SelectedPending { get; set; } = Array.Empty<PendingFileViewModel>();
+    public IReadOnlyList<PendingFileViewModel> SelectedPending
+    {
+        get => _selectedPending;
+        set
+        {
+            _selectedPending = value ?? Array.Empty<PendingFileViewModel>();
+            // Выделили файлы одного changelist'а — он и становится выбранным (и остаётся им после снятия выделения).
+            var ids = _selectedPending.Select(f => f.ChangelistId).Distinct().ToList();
+            if (ids.Count == 1) _selectedChangelistId = ids[0];
+            UpdateChangelistSelection();
+        }
+    }
+    private IReadOnlyList<PendingFileViewModel> _selectedPending = Array.Empty<PendingFileViewModel>();
+
+    // Выбранный changelist: клик по заголовку или по его файлу.
+    private long? _selectedChangelistId;
+    private readonly List<ChangelistHeaderViewModel> _headers = new();
+
+    /// <summary>Подпись кнопки Submit в панели: сразу видно, что именно отправится.</summary>
+    public string SubmitButtonText => ResolveTargetChangelist() switch
+    {
+        null => "Submit…",
+        { IsDefault: true } => "Submit Default…",
+        var cl => $"Submit CL {cl.Id}…",
+    };
+
+    public ICommand SubmitChangelistCommand { get; private set; } = null!;
+    public ICommand RevertChangelistCommand { get; private set; } = null!;
+    public ICommand EditChangelistCommand { get; private set; } = null!;
+    public ICommand DeleteChangelistByIdCommand { get; private set; } = null!;
+
+    /// <summary>Клик по заголовку changelist'а.</summary>
+    public void SelectChangelist(long id)
+    {
+        _selectedChangelistId = id;
+        UpdateChangelistSelection();
+    }
+
+    private void UpdateChangelistSelection()
+    {
+        var target = ResolveTargetChangelist()?.Id;
+        foreach (var h in _headers) h.IsSelected = h.Id == target;
+        OnPropertyChanged(nameof(SubmitButtonText));
+        CommandManager.InvalidateRequerySuggested();
+    }
     public string PendingHeader => "Pending";
     public string PendingError { get => _pendingError; private set => Set(ref _pendingError, value); }
 
@@ -246,6 +290,11 @@ public sealed class MainViewModel : ObservableObject
         SubmitCommand = new AsyncRelayCommand(_ => SubmitAsync(), _ => Selected != null && ResolveTargetChangelist() != null);
         EditDescriptionCommand = new AsyncRelayCommand(_ => EditDescriptionAsync(), _ => ResolveTargetChangelist() is { IsDefault: false });
         DeleteChangelistCommand = new AsyncRelayCommand(_ => DeleteChangelistAsync(), _ => ResolveTargetChangelist() is { IsDefault: false, Files.Count: 0 });
+        // Действия из заголовка changelist'а: параметр — его Id.
+        SubmitChangelistCommand = new AsyncRelayCommand(p => SubmitAsync(Convert.ToInt64(p)), p => p != null && !IsBusy);
+        RevertChangelistCommand = new AsyncRelayCommand(p => RevertChangelistAsync(Convert.ToInt64(p)), p => p != null);
+        EditChangelistCommand = new AsyncRelayCommand(p => EditDescriptionAsync(Convert.ToInt64(p)), p => p != null);
+        DeleteChangelistByIdCommand = new AsyncRelayCommand(p => DeleteChangelistAsync(Convert.ToInt64(p)), p => p != null);
 
         CancelOperationCommand = new RelayCommand(_ => _opCts?.Cancel(), _ => CanCancel);
         ToggleLogCommand = new RelayCommand(_ => IsLogOpen = !IsLogOpen);
@@ -546,8 +595,11 @@ public sealed class MainViewModel : ObservableObject
     {
         _changelists = Array.Empty<PendingChangelist>();
         PendingFiles.Clear();
+        _headers.Clear();
+        _selectedChangelistId = null;   // другой профиль — свои changelist'ы
         PendingError = "";
         _pendingLoadedAt = DateTime.MinValue;
+        OnPropertyChanged(nameof(SubmitButtonText));
         OnPropertyChanged(nameof(PendingHeader));
         OnPropertyChanged(nameof(PendingCount));
         OnPropertyChanged(nameof(PendingCountText));
@@ -570,16 +622,22 @@ public sealed class MainViewModel : ObservableObject
             if (vm != Selected) return;   // за время запроса сменили профиль
             _changelists = list;
             PendingFiles.Clear();
+            _headers.Clear();
             var root = vm.Model.WorkspaceRoot;
             foreach (var cl in list)
             {
                 if (cl.Files.Count == 0 && cl.IsDefault) continue;   // пустой default не показываем
-                if (cl.Files.Count == 0) PendingFiles.Add(new PendingFileViewModel(cl, null, "(empty changelist)"));
+                var header = new ChangelistHeaderViewModel(cl);
+                _headers.Add(header);
+                if (cl.Files.Count == 0) PendingFiles.Add(new PendingFileViewModel(header, null, "(empty changelist)"));
                 foreach (var f in cl.Files)
-                    PendingFiles.Add(new PendingFileViewModel(cl, f, ProfilePaths.ToRelative(root, f.LocalPath)));
+                    PendingFiles.Add(new PendingFileViewModel(header, f, ProfilePaths.ToRelative(root, f.LocalPath)));
             }
+            // Выбранный changelist переживает обновление списка, если он ещё существует.
+            if (_selectedChangelistId is { } sel && list.All(c => c.Id != sel)) _selectedChangelistId = null;
             PendingError = "";
             _pendingLoadedAt = DateTime.UtcNow;
+            UpdateChangelistSelection();
         }
         catch (Exception ex)
         {
@@ -595,7 +653,10 @@ public sealed class MainViewModel : ObservableObject
     private List<OpenedFile> SelectedFilesOnly() =>
         SelectedPending.Where(f => f.File != null).Select(f => f.File!).ToList();
 
-    /// <summary>Changelist, на котором работают Submit/Edit/Delete: из выделения; без выделения — единственный непустой.</summary>
+    /// <summary>
+    /// Changelist, на котором работают Submit/Edit/Delete: выделенные файлы (одного CL) → выбранный заголовок →
+    /// единственный непустой changelist.
+    /// </summary>
     private PendingChangelist? ResolveTargetChangelist()
     {
         if (SelectedPending.Count > 0)
@@ -603,8 +664,20 @@ public sealed class MainViewModel : ObservableObject
             var ids = SelectedPending.Select(f => f.ChangelistId).Distinct().ToList();
             return ids.Count == 1 ? _changelists.FirstOrDefault(c => c.Id == ids[0]) : null;
         }
+        if (_selectedChangelistId is { } id && _changelists.FirstOrDefault(c => c.Id == id) is { } chosen) return chosen;
         var nonEmpty = _changelists.Where(c => c.Files.Count > 0).ToList();
         return nonEmpty.Count == 1 ? nonEmpty[0] : null;
+    }
+
+    private PendingChangelist? ChangelistOrTarget(long? id) =>
+        id is { } explicitId ? _changelists.FirstOrDefault(c => c.Id == explicitId) : ResolveTargetChangelist();
+
+    /// <summary>Revert всех файлов changelist'а (из меню заголовка).</summary>
+    private async Task RevertChangelistAsync(long id)
+    {
+        var cl = _changelists.FirstOrDefault(c => c.Id == id);
+        if (cl == null || cl.Files.Count == 0) return;
+        await RevertFilesAsync(cl.Files.ToList(), $" in {(cl.IsDefault ? "the default changelist" : cl.Title)}");
     }
 
     private async Task ReconcileAsync()
@@ -653,21 +726,22 @@ public sealed class MainViewModel : ObservableObject
         await RefreshPendingAsync();
     }
 
-    private async Task RevertAsync()
+    private Task RevertAsync() => RevertFilesAsync(SelectedFilesOnly(), "");
+
+    private async Task RevertFilesAsync(List<OpenedFile> files, string where)
     {
-        var files = SelectedFilesOnly();
         if (files.Count == 0) return;
         var sample = string.Join(Environment.NewLine, files.Take(8).Select(f => "  " + System.IO.Path.GetFileName(f.LocalPath)));
         var more = files.Count > 8 ? $"{Environment.NewLine}  ...and {files.Count - 8} more" : "";
-        if (!_dialogs.Confirm($"Revert {files.Count} file(s)? Local modifications will be LOST.{Environment.NewLine}{Environment.NewLine}{sample}{more}")) return;
+        if (!_dialogs.Confirm($"Revert {files.Count} file(s){where}? Local modifications will be LOST.{Environment.NewLine}{Environment.NewLine}{sample}{more}")) return;
 
         await _vcs.RevertAsync(Selected!.Model, files.Select(f => f.DepotPath).ToList(), new Progress<string>(AppendOutput));
         await RefreshPendingAsync();
     }
 
-    private async Task EditDescriptionAsync()
+    private async Task EditDescriptionAsync(long? id = null)
     {
-        var cl = ResolveTargetChangelist();
+        var cl = ChangelistOrTarget(id);
         if (cl == null || cl.IsDefault) return;
         var desc = _dialogs.PromptText($"Edit {cl.Title}", "Description:", cl.Description, "Save");
         if (string.IsNullOrWhiteSpace(desc)) return;
@@ -675,20 +749,21 @@ public sealed class MainViewModel : ObservableObject
         await RefreshPendingAsync();
     }
 
-    private async Task DeleteChangelistAsync()
+    private async Task DeleteChangelistAsync(long? id = null)
     {
-        var cl = ResolveTargetChangelist();
+        var cl = ChangelistOrTarget(id);
         if (cl == null || cl.IsDefault || cl.Files.Count > 0) return;
         if (!_dialogs.Confirm($"Delete empty {cl.Title}?")) return;
         await _vcs.DeleteChangelistAsync(Selected!.Model, cl.Id);
         await RefreshPendingAsync();
     }
 
-    private async Task SubmitAsync()
+    private async Task SubmitAsync(long? changelistId = null)
     {
         var vm = Selected!;
         if (IsBusy) throw new InvalidOperationException($"Please wait: {BusyText.TrimEnd('…')} is still running.");
-        var targetId = ResolveTargetChangelist()?.Id;
+        var targetId = changelistId ?? ResolveTargetChangelist()?.Id;
+        if (targetId != null) SelectChangelist(targetId.Value);   // видно, какой changelist отправляется
         if (targetId == null) return;
 
         // Состав changelist'а и пометки P4IGNORE берём свежими: список мог устареть с прошлого обновления.

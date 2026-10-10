@@ -1,7 +1,7 @@
 <Window x:Class="PerforceLauncher.App.Views.ProfileEditWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Project Settings" Icon="/Assets/app.ico" Style="{StaticResource AppWindow}" Width="640" Height="720" WindowStartupLocation="CenterOwner" ResizeMode="CanResize">
+        Title="Project Settings" Icon="/PerforceLauncher;component/Assets/app.ico" Style="{StaticResource AppWindow}" Width="640" Height="720" WindowStartupLocation="CenterOwner" ResizeMode="CanResize">
     <DockPanel Margin="16">
         <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
             <Button Content="Save" IsDefault="True" Click="Ok_Click" Style="{StaticResource PrimaryButton}" Margin="0,0,8,0"/>

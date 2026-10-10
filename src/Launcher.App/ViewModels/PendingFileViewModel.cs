@@ -1,27 +1,64 @@
+using System.Linq;
+using PerforceLauncher.App.Infrastructure;
 using PerforceLauncher.Core.Models;
 
 namespace PerforceLauncher.App.ViewModels;
 
+/// <summary>
+/// Заголовок changelist'а во вкладке Pending: один объект на changelist (по нему же группируются файлы),
+/// поэтому его можно выделить кликом и повесить на него действия (Submit, Edit, Revert, Delete).
+/// </summary>
+public sealed class ChangelistHeaderViewModel : ObservableObject
+{
+    private bool _isSelected;
+
+    public ChangelistHeaderViewModel(PendingChangelist changelist) => Changelist = changelist;
+
+    public PendingChangelist Changelist { get; }
+    public long Id => Changelist.Id;
+    public bool IsDefault => Changelist.IsDefault;
+    public string Title => IsDefault ? "Default changelist" : $"CL {Id}";
+
+    public string Description
+    {
+        get
+        {
+            var d = Changelist.Description.Trim();
+            var nl = d.IndexOfAny(new[] { '\r', '\n' });
+            return nl < 0 ? d : d[..nl];
+        }
+    }
+
+    public int FileCount => Changelist.Files.Count;
+    public string CountText => FileCount == 1 ? "1 file" : $"{FileCount} files";
+    public int IgnoredCount => Changelist.Files.Count(f => f.IsIgnored);
+    public bool CanSubmit => FileCount > 0;
+
+    public bool IsSelected
+    {
+        get => _isSelected;
+        set => Set(ref _isSelected, value);
+    }
+
+    // Для отображения имени группы, если шаблон не задан.
+    public override string ToString() => Title;
+}
+
 /// <summary>Строка вкладки Pending changes: открытый файл либо заглушка «(empty)» пустого changelist'а.</summary>
 public sealed class PendingFileViewModel
 {
-    public PendingFileViewModel(PendingChangelist changelist, OpenedFile? file, string displayPath)
+    public PendingFileViewModel(ChangelistHeaderViewModel header, OpenedFile? file, string displayPath)
     {
-        ChangelistId = changelist.Id;
+        Header = header;
         File = file;
         DisplayPath = displayPath;
-        var desc = changelist.Description;
-        var nl = desc.IndexOfAny(new[] { '\r', '\n' });
-        var first = nl < 0 ? desc : desc[..nl];
-        Group = changelist.IsDefault
-            ? $"Default changelist ({changelist.Files.Count})"
-            : $"{changelist.Title}: {first} ({changelist.Files.Count})";
     }
 
-    public long ChangelistId { get; }
+    /// <summary>Группа (changelist) этой строки; общий объект для всех файлов changelist'а.</summary>
+    public ChangelistHeaderViewModel Header { get; }
+    public long ChangelistId => Header.Id;
     public OpenedFile? File { get; }
     public bool IsPlaceholder => File == null;
-    public string Group { get; }
     public string Action => File?.Action ?? "";
     public string Type => File?.Type ?? "";
     public string DisplayPath { get; }

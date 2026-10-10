@@ -1,7 +1,7 @@
 <Window x:Class="PerforceLauncher.App.Views.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Perforce Launcher" Icon="/Assets/app.ico" Style="{StaticResource AppWindow}"
+        Title="Perforce Launcher" Icon="/PerforceLauncher;component/Assets/app.ico" Style="{StaticResource AppWindow}"
         Width="1280" Height="840" MinWidth="980" MinHeight="640"
         WindowStartupLocation="CenterScreen">
 
@@ -28,7 +28,7 @@
             <DockPanel>
                 <!-- Бренд (зона перетаскивания окна) -->
                 <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="20,16,16,26">
-                    <Image Source="/Assets/app.ico" Width="28" Height="28" RenderOptions.BitmapScalingMode="HighQuality"/>
+                    <Image Source="/PerforceLauncher;component/Assets/app.ico" Width="28" Height="28" RenderOptions.BitmapScalingMode="HighQuality"/>
                     <StackPanel Margin="11,0,0,0" VerticalAlignment="Center">
                         <TextBlock Text="Perforce Launcher" FontFamily="{StaticResource DisplayFont}" FontSize="14" FontWeight="SemiBold"/>
                         <TextBlock Text="for Unreal Engine" FontSize="11" Foreground="{StaticResource TextMuted}"/>
@@ -357,10 +357,10 @@
                                         </Style>
                                     </WrapPanel.Resources>
                                     <Button Command="{Binding SubmitCommand}" Style="{StaticResource PrimaryButton}" Padding="14,5" Margin="0,0,12,6"
-                                            ToolTip="Submit the selected changelist (or the only non-empty one)">
+                                            ToolTip="Submit the selected changelist. Click a changelist header (or one of its files) to choose it.">
                                         <StackPanel Orientation="Horizontal">
                                             <TextBlock Text="&#xE898;" Style="{StaticResource Glyph}" FontSize="12" Margin="0,1,8,0"/>
-                                            <TextBlock Text="Submit…"/>
+                                            <TextBlock Text="{Binding SubmitButtonText}"/>
                                         </StackPanel>
                                     </Button>
                                     <Button Content="Reconcile Offline Work" Command="{Binding ReconcileCommand}"
@@ -390,9 +390,84 @@
                                         </DataGrid.ContextMenu>
                                         <DataGrid.GroupStyle>
                                             <GroupStyle>
+                                                <!-- Заголовок на всю ширину, файлы под ним -->
+                                                <GroupStyle.ContainerStyle>
+                                                    <Style TargetType="GroupItem">
+                                                        <Setter Property="Template">
+                                                            <Setter.Value>
+                                                                <ControlTemplate TargetType="GroupItem">
+                                                                    <StackPanel>
+                                                                        <ContentPresenter Content="{TemplateBinding Content}" ContentTemplate="{TemplateBinding ContentTemplate}"/>
+                                                                        <ItemsPresenter/>
+                                                                    </StackPanel>
+                                                                </ControlTemplate>
+                                                            </Setter.Value>
+                                                        </Setter>
+                                                    </Style>
+                                                </GroupStyle.ContainerStyle>
+                                                <!-- Карточка changelist'а: клик выбирает его; Submit и «⋯» прямо в заголовке.
+                                                     DataContext — группа, её Name — ChangelistHeaderViewModel. -->
                                                 <GroupStyle.HeaderTemplate>
                                                     <DataTemplate>
-                                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" Foreground="{StaticResource TextSecondary}" Margin="4,12,0,4"/>
+                                                        <Border x:Name="Card" Margin="0,10,8,4" CornerRadius="8" BorderThickness="1"
+                                                                BorderBrush="Transparent" Background="Transparent">
+                                                            <Grid>
+                                                                <Grid.ColumnDefinitions>
+                                                                    <ColumnDefinition Width="*"/>
+                                                                    <ColumnDefinition Width="Auto"/>
+                                                                </Grid.ColumnDefinitions>
+                                                                <Border x:Name="Bar" Width="3" CornerRadius="2" HorizontalAlignment="Left" Margin="-1,9,0,9"
+                                                                        Background="{StaticResource TextPrimary}" Visibility="Collapsed"/>
+                                                                <Button Click="ChangelistHeader_Click" Tag="{Binding Name.Id}" Cursor="Hand"
+                                                                        HorizontalContentAlignment="Stretch"
+                                                                        ToolTip="Select this changelist: Submit, Edit Description and Delete act on it">
+                                                                    <Button.Template>
+                                                                        <ControlTemplate TargetType="Button">
+                                                                            <Border Background="Transparent" Padding="12,8,8,8">
+                                                                                <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
+                                                                            </Border>
+                                                                        </ControlTemplate>
+                                                                    </Button.Template>
+                                                                    <DockPanel>
+                                                                        <TextBlock DockPanel.Dock="Left" Text="{Binding Name.Title}" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                                                        <Border DockPanel.Dock="Left" Style="{StaticResource CountBadge}">
+                                                                            <TextBlock Text="{Binding Name.CountText}" FontSize="11"/>
+                                                                        </Border>
+                                                                        <Border DockPanel.Dock="Left" Style="{StaticResource CountBadge}" Background="#26F5B547"
+                                                                                Visibility="{Binding Name.IgnoredCount, Converter={StaticResource HasValueToVis}}"
+                                                                                ToolTip="Files matching .p4ignore that are already tracked in the depot">
+                                                                            <StackPanel Orientation="Horizontal">
+                                                                                <TextBlock Text="⚠ " FontSize="11" Foreground="{StaticResource Warn}"/>
+                                                                                <TextBlock Text="{Binding Name.IgnoredCount}" FontSize="11" Foreground="{StaticResource Warn}"/>
+                                                                                <TextBlock Text=" ignored" FontSize="11" Foreground="{StaticResource Warn}"/>
+                                                                            </StackPanel>
+                                                                        </Border>
+                                                                        <TextBlock Text="{Binding Name.Description}" Foreground="{StaticResource TextSecondary}" Margin="12,0,0,0"
+                                                                                   VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip="{Binding Name.Description}"/>
+                                                                    </DockPanel>
+                                                                </Button>
+                                                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,6,0">
+                                                                    <Button x:Name="SubmitHere" Content="Submit…" Padding="12,3" MinHeight="0" Margin="0,0,4,0"
+                                                                            Command="{Binding DataContext.SubmitChangelistCommand, RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                                                            CommandParameter="{Binding Name.Id}"
+                                                                            Visibility="{Binding Name.CanSubmit, Converter={StaticResource BoolToVis}}"
+                                                                            ToolTip="Submit this changelist"/>
+                                                                    <Button Style="{StaticResource IconButton}" Width="28" Height="28" FontSize="12" Content="&#xE712;"
+                                                                            Click="ChangelistMore_Click" Tag="{Binding Name}" ToolTip="More actions for this changelist"/>
+                                                                </StackPanel>
+                                                            </Grid>
+                                                        </Border>
+                                                        <DataTemplate.Triggers>
+                                                            <Trigger SourceName="Card" Property="IsMouseOver" Value="True">
+                                                                <Setter TargetName="Card" Property="Background" Value="{StaticResource HoverBg}"/>
+                                                            </Trigger>
+                                                            <DataTrigger Binding="{Binding Name.IsSelected}" Value="True">
+                                                                <Setter TargetName="Card" Property="Background" Value="{StaticResource SelectedBg}"/>
+                                                                <Setter TargetName="Card" Property="BorderBrush" Value="{StaticResource CardBorder}"/>
+                                                                <Setter TargetName="Bar" Property="Visibility" Value="Visible"/>
+                                                                <Setter TargetName="SubmitHere" Property="Style" Value="{StaticResource PrimaryButton}"/>
+                                                            </DataTrigger>
+                                                        </DataTemplate.Triggers>
                                                     </DataTemplate>
                                                 </GroupStyle.HeaderTemplate>
                                             </GroupStyle>
@@ -545,7 +620,7 @@
             <!-- Пустое состояние: нет проектов -->
             <StackPanel Grid.Row="1" HorizontalAlignment="Center" VerticalAlignment="Center"
                         Visibility="{Binding HasSelection, Converter={StaticResource InverseBoolToVis}}">
-                <Image Source="/Assets/app.ico" Width="76" Height="76" Opacity="0.9" RenderOptions.BitmapScalingMode="HighQuality"/>
+                <Image Source="/PerforceLauncher;component/Assets/app.ico" Width="76" Height="76" Opacity="0.9" RenderOptions.BitmapScalingMode="HighQuality"/>
                 <TextBlock Text="Add your first project" FontFamily="{StaticResource DisplayFont}" FontSize="20" FontWeight="SemiBold"
                            Margin="0,20,0,6" HorizontalAlignment="Center"/>
                 <TextBlock Text="A project is a Perforce workspace with an Unreal project inside." Foreground="{StaticResource TextMuted}" HorizontalAlignment="Center"/>

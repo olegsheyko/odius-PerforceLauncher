@@ -28,7 +28,7 @@ public partial class MainWindow : Window
         _store = store;
 
         // Pending-файлы группируются по changelist'ам (порядок групп = порядок элементов).
-        CollectionViewSource.GetDefaultView(vm.PendingFiles).GroupDescriptions.Add(new PropertyGroupDescription("Group"));
+        CollectionViewSource.GetDefaultView(vm.PendingFiles).GroupDescriptions.Add(new PropertyGroupDescription(nameof(PendingFileViewModel.Header)));
         Activated += (_, _) => _vm.RefreshPendingIfStale();
         StateChanged += (_, _) => UpdateMaximizedLayout();
         SourceInitialized += (_, _) => ApplyDwmStyle();
@@ -113,6 +113,42 @@ public partial class MainWindow : Window
     {
         if (!ReferenceEquals(e.OriginalSource, MainTabs)) return;
         _vm.SetHistoryTabActive(ReferenceEquals(MainTabs.SelectedItem, HistoryTab));
+    }
+
+    /// <summary>Клик по заголовку changelist'а: выбрать его целиком (выделение файлов снимается).</summary>
+    private void ChangelistHeader_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.Tag is not { } tag) return;
+        PendingList.UnselectAll();
+        _vm.SelectChangelist(System.Convert.ToInt64(tag));
+    }
+
+    /// <summary>Меню «⋯» в заголовке changelist'а.</summary>
+    private void ChangelistMore_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { Tag: ChangelistHeaderViewModel header } button) return;
+        PendingList.UnselectAll();
+        _vm.SelectChangelist(header.Id);
+
+        var menu = new ContextMenu { PlacementTarget = button, Placement = PlacementMode.Bottom };
+        void Add(string text, System.Windows.Input.ICommand command, bool enabled = true)
+        {
+            var item = new MenuItem { Header = text, IsEnabled = enabled };
+            item.Click += (_, _) => command.Execute(header.Id);
+            menu.Items.Add(item);
+        }
+        if (header.CanSubmit) Add("Submit…", _vm.SubmitChangelistCommand);
+        if (!header.IsDefault) Add("Edit Description…", _vm.EditChangelistCommand);
+        if (header.FileCount > 0) Add("Revert All Files…", _vm.RevertChangelistCommand);
+        if (!header.IsDefault)
+        {
+            Add("Delete Changelist", _vm.DeleteChangelistByIdCommand, enabled: header.FileCount == 0);
+            menu.Items.Add(new Separator());
+            var copy = new MenuItem { Header = "Copy CL Number" };
+            copy.Click += (_, _) => _vm.CopyCommand.Execute(header.Id.ToString());
+            menu.Items.Add(copy);
+        }
+        menu.IsOpen = true;
     }
 
     private void PendingList_SelectionChanged(object sender, SelectionChangedEventArgs e) =>

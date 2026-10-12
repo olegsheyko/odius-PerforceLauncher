@@ -94,8 +94,12 @@ public sealed class ChangeWatcher : IDisposable
         catch (P4Exception ex) when (ex.IsAuthError && _session != null)
         {
             // Тикет уже истёк (например, компьютер спал дольше срока): входим сохранённым паролем и повторяем один раз.
-            if (!await _session.TryReloginAsync(profile, _cts.Token)) throw;
-            return await _vcs.GetStatusAsync(profile, _cts.Token);
+            var (result, error) = await _session.ReloginAsync(profile, _cts.Token);
+            if (result == ReloginResult.Renewed) return await _vcs.GetStatusAsync(profile, _cts.Token);
+            // Пароль есть, но сервер недоступен: это «нет связи», а не «нужно войти» — и будет быстрый повтор.
+            if (result == ReloginResult.Unreachable)
+                throw new P4Exception("Perforce server is unreachable; will retry automatically. " + (error ?? ""), isAuthError: false);
+            throw;
         }
     }
 

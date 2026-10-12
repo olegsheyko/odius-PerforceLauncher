@@ -3,6 +3,16 @@ using PerforceLauncher.Core.VersionControl;
 
 namespace PerforceLauncher.Core.Services;
 
+public enum ReloginResult
+{
+    Renewed,
+    NoSavedPassword,
+    /// <summary>Сохранённый пароль отвергнут сервером и удалён.</summary>
+    Rejected,
+    /// <summary>Сервер недоступен: пароль сохранён, попробуем снова.</summary>
+    Unreachable,
+}
+
 /// <summary>
 /// Держит Perforce-сессию живой: если для аккаунта сохранён пароль, перелогинивается заранее (когда тикету
 /// осталось меньше <see cref="RenewBefore"/>) и сразу после ошибки авторизации. Тикет p4 общий для пользователя
@@ -92,53 +102,61 @@ public sealed class SessionKeeper
     }
 
     /// <summary>После ошибки авторизации: войти сохранённым паролем. true — сессия восстановлена.</summary>
-    public async Task<bool> TryReloginAsync(ProjectProfile p, CancellationToken ct = default)
+    public async Task<bool> TryReloginAsync(ProjectProfile p, CancellationToken ct = default) =>
+        (await ReloginAsync(p, ct)).Result == ReloginResult.Renewed;
+
+    /// <summary>То же, но с причиной неудачи: «сервер недоступен» и «нет пароля» — разные состояния для пользователя.</summary>
+    public async Task<(ReloginResult Result, string? Error)> ReloginAsync(ProjectProfile p, CancellationToken ct = default)
     {
         string target;
         try { target = await TargetForAsync(p, ct); }
-        catch (P4Exception) { return false; }
+        catch (P4Exception ex) { return (ReloginResult.Unreachable, ex.Message); }
         var password = _store.Read(target);
         if (password == null)
         {
             if (_reportedMissing.Add(target))
                 DiagLog.Write($"Sign-in: session for {AccountOf(target)} expired, no saved password — automatic sign-in not possible.");
-            return false;
+            return (ReloginResult.NoSavedPassword, null);
         }
         return await LoginWithSavedAsync(p, target, password, ct);
     }
 
-    private async Task<bool> LoginWithSavedAsync(ProjectProfile p, string target, string password, CancellationToken ct)
+    private async Task<(ReloginResult, string?)> LoginWithSavedAsync(ProjectProfile p, string target, string password, CancellationToken ct)
     {
         await _gate.WaitAsync(ct);
         try
         {
             // Другой проект с тем же аккаунтом мог уже продлить тикет, пока мы ждали.
-            if (await _vcs.GetTicketRemainingAsync(p, ct) is { } r && r > RenewBefore) return true;
+            if (await _vcs.GetTicketRemainingAsync(p, ct) is { } r && r > RenewBefore) return (ReloginResult.Renewed, null);
             try
             {
                 await _vcs.LoginAsync(p, password, ct);
                 _lastTicketCheck[target] = DateTime.UtcNow;
                 DiagLog.Write($"Sign-in: session for {AccountOf(target)} renewed automatically.");
                 Renewed?.Invoke(AccountOf(target));
-                return true;
+                return (ReloginResult.Renewed, null);
             }
             catch (P4Exception ex) when (!IsTransient(ex.Message))
             {
                 // Пароль отвергнут (сменили, учётку заблокировали...). Больше не пробуем — удаляем.
                 _store.Delete(target);
-                DiagLog.Write($"Sign-in: saved password for {AccountOf(target)} rejected by server and removed: {ex.Message.Split('\n')[0]}");
+                DiagLog.Write($"Sign-in: saved password for {AccountOf(target)} rejected by server and removed: {OneLine(ex.Message)}");
                 PasswordRejected?.Invoke(AccountOf(target));
-                return false;
+                return (ReloginResult.Rejected, ex.Message);
             }
         }
         catch (P4Exception ex)
         {
             // сеть недоступна: пароль сохраняем, попробуем позже
-            DiagLog.Write($"Sign-in: renewal for {AccountOf(target)} postponed (server unreachable): {ex.Message.Split('\n')[0]}");
-            return false;
+            DiagLog.Write($"Sign-in: renewal for {AccountOf(target)} postponed (server unreachable): {OneLine(ex.Message)}");
+            return (ReloginResult.Unreachable, ex.Message);
         }
         finally { _gate.Release(); }
     }
+
+    /// <summary>Многострочная ошибка p4 одной строкой (в журнал попадала только «Perforce client error:» без причины).</summary>
+    private static string OneLine(string message) =>
+        string.Join(" ", message.Split(new[] { '\r', '\n', '\t' }, StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()));
 
     private static bool IsTransient(string message)
     {

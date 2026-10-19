@@ -24,6 +24,8 @@ public interface IDialogService
     (string Password, bool Remember)? PromptPassword(string message, bool rememberDefault);
     bool EditSettings(AppSettings settings);
     bool Confirm(string message);
+    /// <summary>Выбор из нескольких кнопок (первая — основная, последняя — отмена). Индекс кнопки или -1.</summary>
+    int Choose(string title, string message, params string[] buttons);
     void Error(string message);
     /// <summary>Многострочный ввод текста (описание changelist'а). null = отмена.</summary>
     string? PromptText(string title, string caption, string initial, string okText);
@@ -66,9 +68,44 @@ public sealed class MainViewModel : ObservableObject
     // ---------- подсказка под статусом («сгенерируйте project files» и т.п.) ----------
     private string _hintText = "";
     private string _hintKey = "";
+    private string _hintActionText = "";
+    private Action? _hintAction;
     private readonly HashSet<string> _dismissedHints = new();
     public string HintText { get => _hintText; private set { if (Set(ref _hintText, value)) OnPropertyChanged(nameof(HasHint)); } }
     public bool HasHint => _hintText.Length > 0;
+    /// <summary>Подпись кнопки в подсказке («Build Project», «Generate Project Files»).</summary>
+    public string HintActionText { get => _hintActionText; private set => Set(ref _hintActionText, value); }
+    /// <summary>Подсказка «нужно собрать» — отдельный акцент в баннере.</summary>
+    public bool HintIsBuild => _hintKey.StartsWith("build:");
+
+    // Подсказка после Get Latest «изменились build-файлы» живёт, пока её не закрыли или не выполнили (по профилю).
+    private (Guid ProfileId, string Key, string Text)? _syncHint;
+
+    // ---------- состояние сборки C++ (нужно ли пересобрать после синка) ----------
+    private readonly ProjectBuilder _builder = new(new EngineLocator());
+    // Когда лаунчер синкнул код в профиль: страховка для воркспейсов с опцией modtime, где время файлов — из депо.
+    private readonly Dictionary<Guid, DateTime> _codeSyncedAt = new();
+    private BuildState _buildState = BuildState.NoCode;
+    private int _buildStateVersion;
+    private DateTime _buildStateCheckedAt = DateTime.MinValue;
+
+    public BuildState BuildState
+    {
+        get => _buildState;
+        private set
+        {
+            if (!Set(ref _buildState, value)) return;
+            OnPropertyChanged(nameof(NeedsBuild));
+            OnPropertyChanged(nameof(CanBuild));
+            OnPropertyChanged(nameof(BuildToolTip));
+        }
+    }
+    public bool NeedsBuild => _buildState.NeedsBuild;
+    /// <summary>Кнопка «Build Project» есть только у проектов с C++ кодом.</summary>
+    public bool CanBuild => _buildState.HasCode;
+    public string BuildToolTip => _buildState.NeedsBuild
+        ? $"Needs a build: {_buildState.Summary}. Until you build, Unreal runs the old code."
+        : "Compile the project's C++ code (incremental, like Build in your IDE). Code is up to date.";
 
     public int PendingCount => _changelists.Sum(c => c.Files.Count);
     public string PendingCountText => PendingCount == 1 ? "1 file" : $"{PendingCount} files";
@@ -109,6 +146,7 @@ public sealed class MainViewModel : ObservableObject
     public ICommand SyncToChangeCommand { get; }
     public ICommand HintCommand { get; }
     public ICommand DismissHintCommand { get; }
+    public ICommand BuildProjectCommand { get; }
     public ICommand ShowInExplorerCommand { get; }
 
     public ICommand AddProfileCommand { get; }
@@ -263,6 +301,7 @@ public sealed class MainViewModel : ObservableObject
                 foreach (var h in _history) h.UpdateHave(pvm.HaveChange);
                 foreach (var a in Actions) a.Refresh();   // .sln/.uproject могли появиться после sync
                 UpdateHint();
+                _ = UpdateBuildStateAsync();   // код мог прийти синком из P4V/Unreal
             }
         };
         _watcher.NewChangesFound += OnNewChanges;
@@ -305,8 +344,9 @@ public sealed class MainViewModel : ObservableObject
         RevealCommand = new RelayCommand(p => { if (p is string path && path.Length > 0) ShellHelper.Reveal(path); });
         CopyCommand = new RelayCommand(p => CopyToClipboard(p?.ToString()));
         SyncToChangeCommand = new AsyncRelayCommand(p => SyncToChangeAsync(p as HistoryEntry), p => p is HistoryEntry && !IsBusy);
-        HintCommand = new RelayCommand(_ => RunHintAction());
-        DismissHintCommand = new RelayCommand(_ => { _dismissedHints.Add(_hintKey); HintText = ""; });
+        HintCommand = new RelayCommand(_ => RunHintAction(), _ => !IsBusy);
+        DismissHintCommand = new RelayCommand(_ => { _dismissedHints.Add(_hintKey); UpdateHint(); });
+        BuildProjectCommand = new AsyncRelayCommand(_ => BuildProjectAsync(Selected!.Model), _ => Selected != null && CanBuild && !IsBusy);
         ShowInExplorerCommand = new RelayCommand(_ => { if (Selected != null) ShellHelper.Reveal(Selected.Model.WorkspaceRoot); },
             _ => Selected != null && System.IO.Directory.Exists(Selected.Model.WorkspaceRoot));
 
@@ -331,8 +371,9 @@ public sealed class MainViewModel : ObservableObject
             if (_historyTabActive) EnsureHistoryLoaded();
             OnPropertyChanged(nameof(ConnectionText));
             if (value != null) _ = LoadConnectionAsync(value);
-            HintText = "";
+            BuildState = BuildState.NoCode;
             UpdateHint();
+            _ = UpdateBuildStateAsync(force: true);
         }
     }
 
@@ -428,6 +469,11 @@ public sealed class MainViewModel : ObservableObject
         new(@"[\\/](?<name>[^\\/#]+\.(uproject|uplugin|Build\.cs|Target\.cs))#\d+ - (added|updating|deleted|replacing)",
             System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
+    // Синк принёс C++ код (в том числе удаление файлов — его по времени изменения не увидеть).
+    private static readonly System.Text.RegularExpressions.Regex CodeFileRx =
+        new(@"\.(cpp|h|hpp|inl|c|cc|cs|ispc)#\d+ - (added|updating|deleted|replacing)",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
     private async Task SyncAsync()
     {
         var vm = Selected!;
@@ -442,18 +488,21 @@ public sealed class MainViewModel : ObservableObject
             {
                 AppendOutput(line);
                 if (BuildFileRx.Match(line) is { Success: true } m) changedBuildFiles.Add(m.Groups["name"].Value);
+                if (CodeFileRx.IsMatch(line)) _codeSyncedAt[vm.Model.Id] = DateTime.Now;
             });
             await _vcs.SyncAsync(vm.Model, progress, ct);
             AppendOutput("Get latest finished.");
         });
         _watcher.ResetNotified(vm.Model.Id);
-        await CheckAsync(vm);
 
-        if (changedBuildFiles.Count > 0 && vm == Selected)
+        if (changedBuildFiles.Count > 0)
         {
             var names = string.Join(", ", changedBuildFiles.Distinct().Take(3)) + (changedBuildFiles.Distinct().Count() > 3 ? "…" : "");
-            ShowHint($"sync:{DateTime.Now.Ticks}", $"Build files changed ({names}). Regenerate project files so your IDE picks them up.");
+            _syncHint = (vm.Model.Id, $"sync:{DateTime.Now.Ticks}", $"Build files changed ({names}). Regenerate project files so your IDE picks them up.");
         }
+        await CheckAsync(vm);
+        await UpdateBuildStateAsync(force: true);
+        if (vm == Selected && NeedsBuild) AppendOutput($"C++ code changed: {BuildState.Summary}. Press Build Project so Unreal runs the new code.");
     }
 
     private async Task SyncToChangeAsync(HistoryEntry? entry)
@@ -472,11 +521,16 @@ public sealed class MainViewModel : ObservableObject
         {
             Output = "";
             AppendOutput($"> p4 sync @{entry.Id} ({vm.Subtitle})");
-            await _vcs.SyncToChangeAsync(vm.Model, entry.Id, new Progress<string>(AppendOutput), ct);
+            await _vcs.SyncToChangeAsync(vm.Model, entry.Id, new Progress<string>(line =>
+            {
+                AppendOutput(line);
+                if (CodeFileRx.IsMatch(line)) _codeSyncedAt[vm.Model.Id] = DateTime.Now;
+            }), ct);
             AppendOutput($"Workspace is now at CL {entry.Id}.");
         });
         _watcher.ResetNotified(vm.Model.Id);
         await CheckAsync(vm);
+        await UpdateBuildStateAsync(force: true);
     }
 
     /// <summary>Единая обёртка для долгих операций: индикатор, журнал, отмена (убивает процесс p4).</summary>
@@ -501,31 +555,162 @@ public sealed class MainViewModel : ObservableObject
         }
     }
 
-    private void ShowHint(string key, string text)
-    {
-        if (_dismissedHints.Contains(key)) return;
-        _hintKey = key;
-        HintText = text;
-    }
-
-    /// <summary>Постоянная подсказка: проект есть, а .sln нет (например, .sln не хранится в депо).</summary>
+    /// <summary>
+    /// Одна подсказка под статусом, по приоритету: «нужно собрать C++» → «изменились build-файлы» → «нет .sln».
+    /// Закрытая подсказка не возвращается, пока не изменится её содержание (ключ).
+    /// </summary>
     private void UpdateHint()
     {
         var vm = Selected;
-        if (vm == null || (HasHint && _hintKey.StartsWith("sync:"))) return;
-        var up = ProfilePaths.UProject(vm.Model);
-        var sln = ProfilePaths.Solution(vm.Model);
-        if (up != null && System.IO.File.Exists(up) && (sln == null || !System.IO.File.Exists(sln)))
-            ShowHint($"nosln:{vm.Model.Id}", "No solution file yet. Generate project files to open the code in your IDE.");
-        else if (_hintKey.StartsWith("nosln:")) HintText = "";
+        var candidates = new List<(string Key, string Text, string ActionText, Action Run)>();
+        if (vm != null)
+        {
+            var id = vm.Model.Id;
+            if (_buildState.NeedsBuild)
+                candidates.Add(($"build:{id}:{_buildState.Summary}",
+                    $"C++ code changed since your last build: {_buildState.Summary}. Unreal will run the old code until you build.",
+                    "Build Project", () => BuildProjectCommand.Execute(null)));
+            if (_syncHint is { } sh && sh.ProfileId == id)
+                candidates.Add((sh.Key, sh.Text, "Generate Project Files", RunGenerateProjectFiles));
+            var up = ProfilePaths.UProject(vm.Model);
+            var sln = ProfilePaths.Solution(vm.Model);
+            if (up != null && System.IO.File.Exists(up) && (sln == null || !System.IO.File.Exists(sln)))
+                candidates.Add(($"nosln:{id}", "No solution file yet. Generate project files to open the code in your IDE.",
+                    "Generate Project Files", RunGenerateProjectFiles));
+        }
+
+        var pick = candidates.FirstOrDefault(c => !_dismissedHints.Contains(c.Key));
+        _hintKey = pick.Key ?? "";
+        _hintAction = pick.Run;
+        HintActionText = pick.ActionText ?? "";
+        HintText = pick.Text ?? "";
+        OnPropertyChanged(nameof(HintIsBuild));
     }
 
     private void RunHintAction()
     {
+        var run = _hintAction;
+        // «build» не скрываем: если сборка упала, подсказка должна остаться; исчезнет сама, когда код соберётся.
+        if (_hintKey.StartsWith("sync:")) _syncHint = null;
+        else if (_hintKey.StartsWith("nosln:")) _dismissedHints.Add(_hintKey);   // .sln появится через несколько секунд
+        UpdateHint();
+        run?.Invoke();
+    }
+
+    private void RunGenerateProjectFiles()
+    {
         var gen = Actions.FirstOrDefault(a => a.Action.Id == "genproj");
-        HintText = "";
         if (gen?.Command is { } c && c.CanExecute(null)) c.Execute(null);
     }
+
+    // ---------- сборка C++ ----------
+
+    /// <summary>Пересчитать «нужна ли сборка» для выбранного профиля (обход Source — в фоне).</summary>
+    public async Task UpdateBuildStateAsync(bool force = false)
+    {
+        var vm = Selected;
+        if (vm == null) return;
+        if (!force && DateTime.UtcNow - _buildStateCheckedAt < TimeSpan.FromSeconds(5)) return;
+        _buildStateCheckedAt = DateTime.UtcNow;
+        var version = ++_buildStateVersion;
+        var state = await CheckBuildStateAsync(vm.Model);
+        if (version != _buildStateVersion || vm != Selected) return;   // за это время выбрали другой проект
+        BuildState = state;
+        UpdateHint();
+        CommandManager.InvalidateRequerySuggested();
+    }
+
+    private Task<BuildState> CheckBuildStateAsync(ProjectProfile p)
+    {
+        var up = ProfilePaths.UProject(p);
+        DateTime? synced = _codeSyncedAt.TryGetValue(p.Id, out var t) ? t : null;
+        if (up == null) return Task.FromResult(BuildState.NoCode);
+        return Task.Run(() =>
+        {
+            try { return BuildStateChecker.Check(up, synced); }
+            catch (Exception) { return BuildState.NoCode; }   // проверка — подсказка, а не блокер
+        });
+    }
+
+    /// <summary>Окно стало активным (пользователь мог собрать проект в IDE) — обновить подсказку.</summary>
+    public void OnWindowActivated()
+    {
+        RefreshPendingIfStale();
+        if (!IsBusy) _ = UpdateBuildStateAsync();
+    }
+
+    /// <summary>Инкрементальная сборка editor-цели через Build.bat движка. true — собрано.</summary>
+    private async Task<bool> BuildProjectAsync(ProjectProfile profile)
+    {
+        var name = Profiles.FirstOrDefault(p => p.Model.Id == profile.Id)?.Name ?? profile.Name;
+        if (_builder.GetPlan(profile) is not { } plan)
+        {
+            _dialogs.Error($"{name}: can't build — the engine's Build.bat or the .uproject was not found. Check the engine in Project Settings.");
+            return false;
+        }
+        if (EditorRunning() && !_dialogs.Confirm(
+                "Unreal Editor is running. Close it before building: the build can't replace modules the editor has loaded, " +
+                "and Live Coding blocks it.\n\nBuild anyway?"))
+            return false;
+
+        var ok = false;
+        string? failure = null;
+        await RunBusyAsync($"Building {name}…", cancellable: true, async ct =>
+        {
+            Output = "";
+            AppendOutput($"> Build {plan.Target} Win64 Development ({System.IO.Path.GetFileName(plan.UProject)})");
+            var lines = new Progress<string>(AppendOutput);
+            var steps = new Progress<(int Done, int Total)>(s => BusyText = $"Building {name}… {s.Done}/{s.Total}");
+            var sw = Stopwatch.StartNew();
+            try
+            {
+                await _builder.BuildAsync(profile, ((IProgress<string>)lines).Report,
+                    (n, m) => ((IProgress<(int, int)>)steps).Report((n, m)), ct);
+                ok = true;
+            }
+            catch (InvalidOperationException ex) { failure = ex.Message; }
+            catch (P4Exception ex) { failure = ex.Message; }   // cmd.exe не запустился
+            await Task.Yield();   // дать Progress дописать последние строки до итоговой
+            AppendOutput(ok ? $"Build succeeded in {sw.Elapsed:m\\:ss}." : failure ?? "Build failed.");
+        });
+
+        _buildStateCheckedAt = DateTime.MinValue;
+        if (Selected?.Model.Id == profile.Id) await UpdateBuildStateAsync(force: true);
+        if (ok)
+        {
+            if (!IsWindowShown()) _notifier.Notify($"{name}: build succeeded", "The project is compiled and ready to launch.", profile.Id);
+        }
+        else if (failure != null)
+        {
+            if (!IsWindowShown()) _notifier.Notify($"{name}: build failed", "Open the launcher to see the compiler output.", profile.Id);
+            _dialogs.Error($"{name}: build failed.\n\nThe compiler output is in Activity (errors are near the end).");
+        }
+        return ok;
+    }
+
+    /// <summary>Перед запуском редактора: код новее сборки — предложить собрать. false — запуск отменён.</summary>
+    private async Task<bool> OfferBuildBeforeLaunchAsync(ProjectProfile profile)
+    {
+        if (IsBusy || EditorRunning()) return true;   // уже что-то идёт / редактор открыт: не мешаем
+        var state = await CheckBuildStateAsync(profile);
+        if (Selected?.Model.Id == profile.Id) { BuildState = state; UpdateHint(); }
+        if (!state.NeedsBuild) return true;
+
+        var name = Profiles.FirstOrDefault(p => p.Model.Id == profile.Id)?.Name ?? profile.Name;
+        var choice = _dialogs.Choose($"Build {name} first?",
+            $"C++ code changed since your last build: {state.Summary}.\n\n" +
+            "If you launch now, Unreal runs the old code — recent changes won't work and you may see bugs that are already fixed.",
+            "Build and Launch", "Launch Anyway", "Cancel");
+        return choice switch
+        {
+            0 => await BuildProjectAsync(profile),
+            1 => true,
+            _ => false,
+        };
+    }
+
+    /// <summary>Задаётся окном: видно ли оно (иначе о результате сборки сообщаем уведомлением).</summary>
+    public Func<bool> IsWindowShown { get; set; } = () => true;
 
     private void CopyToClipboard(string? text)
     {
@@ -907,7 +1092,7 @@ public sealed class MainViewModel : ObservableObject
 
     /// <summary>Пользовательские команды из профиля запускаются с правами пользователя, поэтому перед первым
     /// запуском за сессию показываем, что именно будет выполнено (защита от подменённого settings.json).</summary>
-    private Task RunActionAsync(ILaunchAction action, ProjectProfile profile)
+    private async Task RunActionAsync(ILaunchAction action, ProjectProfile profile)
     {
         if (action is CustomCommandAction custom && !_approvedCustom.Contains(custom.CommandLine))
         {
@@ -915,10 +1100,12 @@ public sealed class MainViewModel : ObservableObject
                 $"Run custom command from this profile?{Environment.NewLine}{Environment.NewLine}" +
                 $"{custom.DisplayName}{Environment.NewLine}{custom.CommandLine}{Environment.NewLine}{Environment.NewLine}" +
                 "It runs with your user rights. Continue only if you configured this command yourself.");
-            if (!ok) return Task.CompletedTask;
+            if (!ok) return;
             _approvedCustom.Add(custom.CommandLine);
         }
-        return action.ExecuteAsync(profile);
+        // Движок сам не предлагает пересобрать, если код новее DLL, — и запускается со старым кодом.
+        if (action.Id == "editor" && !await OfferBuildBeforeLaunchAsync(profile)) return;
+        await action.ExecuteAsync(profile);
     }
 
     // ---------- events ----------

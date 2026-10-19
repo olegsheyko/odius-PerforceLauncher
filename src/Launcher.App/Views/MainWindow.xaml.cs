@@ -29,7 +29,8 @@ public partial class MainWindow : Window
 
         // Pending-файлы группируются по changelist'ам (порядок групп = порядок элементов).
         CollectionViewSource.GetDefaultView(vm.PendingFiles).GroupDescriptions.Add(new PropertyGroupDescription(nameof(PendingFileViewModel.Header)));
-        Activated += (_, _) => _vm.RefreshPendingIfStale();
+        Activated += (_, _) => _vm.OnWindowActivated();
+        vm.IsWindowShown = () => IsVisible && WindowState != WindowState.Minimized;
         StateChanged += (_, _) => UpdateMaximizedLayout();
         SourceInitialized += (_, _) => ApplyDwmStyle();
         RestorePlacement();

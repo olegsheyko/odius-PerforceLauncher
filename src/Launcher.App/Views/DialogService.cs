@@ -262,6 +262,44 @@ public sealed class DialogService : IDialogService
         return w;
     }
 
+    public int Choose(string title, string message, params string[] buttons)
+    {
+        var choice = -1;
+        var bar = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        var panel = new StackPanel
+        {
+            Margin = new Thickness(18),
+            Children =
+            {
+                new TextBlock { Text = title, FontSize = 16, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 8) },
+                new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap, MaxWidth = 460, Margin = new Thickness(0, 0, 0, 18) },
+                bar,
+            },
+        };
+        // Окно лаунчера может быть скрыто в трей (запуск из меню трея): тогда диалог сам по центру экрана и поверх всех.
+        var owner = Owner is { IsVisible: true } o ? o : null;
+        var win = new Window
+        {
+            Title = "Perforce Launcher", Content = panel, SizeToContent = SizeToContent.WidthAndHeight, ResizeMode = ResizeMode.NoResize,
+            Owner = owner, ShowInTaskbar = owner == null, Topmost = owner == null,
+            WindowStartupLocation = owner != null ? WindowStartupLocation.CenterOwner : WindowStartupLocation.CenterScreen,
+        };
+        for (var i = 0; i < buttons.Length; i++)
+        {
+            var index = i;
+            var b = new Button
+            {
+                Content = buttons[i], Padding = new Thickness(14, 6, 14, 6), MinWidth = 90,
+                Margin = new Thickness(i == 0 ? 0 : 8, 0, 0, 0), IsCancel = i == buttons.Length - 1,
+            };
+            b.Click += (_, _) => { choice = index; win.DialogResult = true; };
+            bar.Children.Add(b);
+        }
+        win.Loaded += (_, _) => { win.Activate(); (bar.Children[0] as Button)?.Focus(); };
+        Themed(win).ShowDialog();
+        return choice;
+    }
+
     public bool Confirm(string message) =>
         // Кнопка по умолчанию — «No»: случайный Enter не должен подтверждать revert/submit.
         MessageBox.Show(Owner!, message, "Perforce Launcher", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) == MessageBoxResult.Yes;

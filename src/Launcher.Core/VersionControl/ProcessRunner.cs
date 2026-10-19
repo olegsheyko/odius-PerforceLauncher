@@ -38,9 +38,21 @@ public static class ProcessRunner
         return new RawProcessResult(exit, bytes, stderr);
     }
 
+    /// <summary>Запуск с готовой командной строкой (для cmd /c с вложенными кавычками, где ArgumentList не подходит).</summary>
+    public static async Task<ProcessResult> RunCommandLineAsync(string exe, string arguments, Action<string>? onLine, CancellationToken ct = default)
+    {
+        var stdout = new List<string>();
+        var (exit, _, stderr) = await RunCoreAsync(exe, Array.Empty<string>(), null, null, ct, line =>
+        {
+            lock (stdout) stdout.Add(line);
+            onLine?.Invoke(line);
+        }, onLine, rawArguments: arguments);
+        return new ProcessResult(exit, stdout, stderr);
+    }
+
     private static async Task<(int Exit, byte[] StdOut, List<string> StdErr)> RunCoreAsync(
         string exe, IEnumerable<string> args, string? stdin, Encoding? stdinEncoding, CancellationToken ct,
-        Action<string>? stdoutLine, Action<string>? onErrLine)
+        Action<string>? stdoutLine, Action<string>? onErrLine, string? rawArguments = null)
     {
         var psi = new ProcessStartInfo(exe)
         {
@@ -51,7 +63,8 @@ public static class ProcessRunner
             CreateNoWindow = true,
             StandardInputEncoding = stdinEncoding ?? new UTF8Encoding(false),
         };
-        foreach (var a in args) psi.ArgumentList.Add(a);
+        if (rawArguments != null) psi.Arguments = rawArguments;
+        else foreach (var a in args) psi.ArgumentList.Add(a);
 
         using var p = new Process { StartInfo = psi };
         try { p.Start(); }

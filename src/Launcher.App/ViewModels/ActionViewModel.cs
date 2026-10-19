@@ -52,7 +52,7 @@ public sealed class ActionViewModel : ObservableObject
     {
         "editor" => "",    // Play
         "solution" => "",  // Code
-        "genproj" => "",   // Repair
+        "genproj" => "",   // Document
         "folder" => "",    // FolderOpen
         _ => "",           // CommandPrompt
     };

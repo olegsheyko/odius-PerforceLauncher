@@ -42,6 +42,8 @@ powershell -File build-exe.ps1      # -> dist\PerforceLauncher.exe (не обн�
   Blueprint-only проекты не затрагиваются.
 - **Incoming / Pending / History**: submit, reconcile, changelist'ы, revert; предупреждение ⚠ для файлов из `.p4ignore`, уже лежащих в депо;
   история с поиском, файлами коммита и «Sync Workspace to This Changelist…».
+  В окне описания changelist'а есть кнопка «Translate to English»: она переводит русский текст через Google Translate
+  (если он недоступен, через MyMemory), а «Restore Original» или Ctrl+Z возвращают исходный текст.
 - **Трей**: один клик — окно; меню «Launch Unreal» для каждого проекта; уведомления, напоминание после входа/сна.
 - Один экземпляр (повторный запуск показывает окно), запоминание положения окна, журнал операций (Ctrl+L), F5 — проверить сейчас.
 

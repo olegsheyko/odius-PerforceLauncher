@@ -235,18 +235,100 @@ public sealed class DialogService : IDialogService
             Text = initial, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             Width = 480, Height = 160, Margin = new Thickness(0, 8, 0, 12),
         };
-        var ok = new Button { Content = okText, IsDefault = false, Margin = new Thickness(0, 0, 8, 0), Padding = new Thickness(14, 6, 14, 6) };
+        var ok = new Button { Content = okText, IsDefault = false, Margin = new Thickness(0, 0, 8, 0), Padding = new Thickness(14, 6, 14, 6),
+            Style = (Style)Application.Current.FindResource("PrimaryButton") };
         var cancel = new Button { Content = "Cancel", IsCancel = true, Padding = new Thickness(14, 6, 14, 6) };
-        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Children = { ok, cancel } };
-        var panel = new StackPanel { Margin = new Thickness(16), Children = { new TextBlock { Text = caption, TextWrapping = TextWrapping.Wrap, MaxWidth = 480 }, box, buttons } };
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, Children = { ok, cancel } };
+
+        // Перевод описания на английский (коммиты в депо пишутся на английском)
+        var translateText = new TextBlock { Text = "Translate to English", VerticalAlignment = VerticalAlignment.Center };
+        var translate = new Button
+        {
+            Padding = new Thickness(12, 6, 14, 6),
+            ToolTip = "Translate the description from Russian to English (sends the text to Google Translate)",
+            Content = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Children = { new TextBlock { Text = "", Style = (Style)Application.Current.FindResource("Glyph"), Margin = new Thickness(0, 0, 8, 0) }, translateText },
+            },
+        };
+        var status = new TextBlock { Foreground = (Brush)Application.Current.FindResource("Danger"), FontSize = 12, TextWrapping = TextWrapping.Wrap,
+            MaxWidth = 480, Margin = new Thickness(0, -4, 0, 10), Visibility = Visibility.Collapsed };
+        var bar = new DockPanel { LastChildFill = false };
+        DockPanel.SetDock(translate, Dock.Left);
+        DockPanel.SetDock(buttons, Dock.Right);
+        bar.Children.Add(translate);
+        bar.Children.Add(buttons);
+
+        var panel = new StackPanel { Margin = new Thickness(16), Children = { new TextBlock { Text = caption, TextWrapping = TextWrapping.Wrap, MaxWidth = 480 }, box, status, bar } };
         var win = new Window
         {
             Title = title, Content = panel, SizeToContent = SizeToContent.WidthAndHeight,
             WindowStartupLocation = WindowStartupLocation.CenterOwner, Owner = Owner, ResizeMode = ResizeMode.NoResize,
         };
+
+        string? original = null, translated = null;
+        var replacing = false;
+        void Replace(string text)
+        {
+            replacing = true;
+            try { ReplaceText(box, text); }
+            finally { replacing = false; }
+        }
+        void UpdateTranslateButton()
+        {
+            translateText.Text = translated != null ? "Restore Original" : "Translate to English";
+            translate.IsEnabled = translated != null || Translator.HasCyrillic(box.Text);
+        }
+        box.TextChanged += (_, _) =>
+        {
+            if (replacing) return;
+            if (translated != null && box.Text != translated) { original = translated = null; }   // правят перевод — он теперь их текст
+            UpdateTranslateButton();
+        };
+        translate.Click += async (_, _) =>
+        {
+            status.Visibility = Visibility.Collapsed;
+            if (translated != null)
+            {
+                var restore = original!;
+                original = translated = null;
+                Replace(restore);
+                UpdateTranslateButton();
+                return;
+            }
+            var source = box.Text;
+            translate.IsEnabled = false;
+            translateText.Text = "Translating…";
+            try
+            {
+                var result = await Translator.ToEnglishAsync(source);
+                if (box.Text != source) return;   // пока ждали ответ, текст изменили — не затираем
+                original = source;
+                Replace(result);
+                translated = box.Text;   // как TextBox сохранил текст (переносы строк)
+            }
+            catch (Exception ex)
+            {
+                status.Text = "Couldn't translate: " + ex.Message;
+                status.Visibility = Visibility.Visible;
+            }
+            finally { UpdateTranslateButton(); }
+        };
+        UpdateTranslateButton();
+
         ok.Click += (_, _) => win.DialogResult = true;
         win.Loaded += (_, _) => { box.Focus(); box.CaretIndex = box.Text.Length; };
         return Themed(win).ShowDialog() == true ? box.Text : null;
+    }
+
+    /// <summary>Заменить текст так, чтобы работал Ctrl+Z (присваивание Text сбрасывает историю отмены).</summary>
+    private static void ReplaceText(TextBox box, string text)
+    {
+        box.SelectAll();
+        box.SelectedText = text;
+        box.CaretIndex = box.Text.Length;
+        box.Focus();
     }
 
     /// <summary>Окна, собранные в коде, получают общий стиль (тёмный фон/текст) и иконку приложения.</summary>

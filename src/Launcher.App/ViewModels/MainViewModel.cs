@@ -27,8 +27,9 @@ public interface IDialogService
     /// <summary>Выбор из нескольких кнопок (первая — основная, последняя — отмена). Индекс кнопки или -1.</summary>
     int Choose(string title, string message, params string[] buttons);
     void Error(string message);
-    /// <summary>Многострочный ввод текста (описание changelist'а). null = отмена.</summary>
-    string? PromptText(string title, string caption, string initial, string okText);
+    /// <summary>Многострочный ввод текста (описание changelist'а). null = отмена.
+    /// requireEnglish: русский текст переводится на английский перед закрытием (описание коммита).</summary>
+    string? PromptText(string title, string caption, string initial, string okText, bool requireEnglish = false);
 }
 
 public sealed class MainViewModel : ObservableObject
@@ -974,11 +975,27 @@ public sealed class MainViewModel : ObservableObject
         }
 
         var caption = $"Submit {cl.Files.Count} file(s) from {cl.Title} to {vm.Subtitle}. Description:";
-        var desc = _dialogs.PromptText("Submit", caption, cl.Description, "Submit");
+        var desc = _dialogs.PromptText("Submit", caption, cl.Description, "Submit", requireEnglish: true);
         if (string.IsNullOrWhiteSpace(desc)) return;
         desc = desc.Trim();
+        // Страховка: в депо коммиты только с английским описанием, даже если русский текст как-то прошёл мимо окна.
+        if (Translator.HasCyrillic(desc))
+        {
+            try { desc = (await Translator.ToEnglishAsync(desc)).Trim(); }
+            catch (InvalidOperationException ex)
+            {
+                _dialogs.Error($"The description is in Russian and couldn't be translated to English: {ex.Message}\n\nNothing was submitted.");
+                return;
+            }
+            if (Translator.HasCyrillic(desc))
+            {
+                _dialogs.Error("Some words in the description couldn't be translated to English. Edit them and submit again.\n\nNothing was submitted.");
+                return;
+            }
+        }
 
         Output = "";
+        AppendOutput("Description: " + desc.Replace(Environment.NewLine, " / "));
         var profile = vm.Model;
         var id = cl.Id;
         if (cl.IsDefault)

@@ -228,7 +228,7 @@ public sealed class DialogService : IDialogService
         return true;
     }
 
-    public string? PromptText(string title, string caption, string initial, string okText)
+    public string? PromptText(string title, string caption, string initial, string okText, bool requireEnglish = false)
     {
         var box = new TextBox
         {
@@ -260,7 +260,11 @@ public sealed class DialogService : IDialogService
         bar.Children.Add(translate);
         bar.Children.Add(buttons);
 
-        var panel = new StackPanel { Margin = new Thickness(16), Children = { new TextBlock { Text = caption, TextWrapping = TextWrapping.Wrap, MaxWidth = 480 }, box, status, bar } };
+        var note = new TextBlock { Foreground = (Brush)Application.Current.FindResource("TextMuted"), FontSize = 12, TextWrapping = TextWrapping.Wrap,
+            MaxWidth = 480, Margin = new Thickness(0, -4, 0, 10), Visibility = Visibility.Collapsed,
+            Text = $"Russian text will be translated to English when you press {okText}." };
+
+        var panel = new StackPanel { Margin = new Thickness(16), Children = { new TextBlock { Text = caption, TextWrapping = TextWrapping.Wrap, MaxWidth = 480 }, box, note, status, bar } };
         var win = new Window
         {
             Title = title, Content = panel, SizeToContent = SizeToContent.WidthAndHeight,
@@ -279,6 +283,8 @@ public sealed class DialogService : IDialogService
         {
             translateText.Text = translated != null ? "Restore Original" : "Translate to English";
             translate.IsEnabled = translated != null || Translator.HasCyrillic(box.Text);
+            note.Visibility = requireEnglish && Translator.HasCyrillic(box.Text) && status.Visibility != Visibility.Visible
+                ? Visibility.Visible : Visibility.Collapsed;
         }
         box.TextChanged += (_, _) =>
         {
@@ -317,7 +323,48 @@ public sealed class DialogService : IDialogService
         };
         UpdateTranslateButton();
 
-        ok.Click += (_, _) => win.DialogResult = true;
+        ok.Click += async (_, _) =>
+        {
+            if (!requireEnglish || !Translator.HasCyrillic(box.Text)) { win.DialogResult = true; return; }
+
+            // Коммит должен уйти с английским описанием: сначала переводим (результат виден в поле), потом закрываем.
+            var source = box.Text;
+            var okContent = ok.Content;
+            status.Visibility = Visibility.Collapsed;
+            ok.IsEnabled = translate.IsEnabled = box.IsEnabled = false;
+            ok.Content = "Translating…";
+            try
+            {
+                var result = await Translator.ToEnglishAsync(source);
+                if (!win.IsVisible) return;   // пока переводили, окно закрыли (Esc)
+                original = source;
+                Replace(result);
+                translated = box.Text;
+                if (Translator.HasCyrillic(result))
+                {
+                    status.Text = "Some words were not translated. Edit them to English and press " + okText + " again.";
+                    status.Visibility = Visibility.Visible;
+                    return;
+                }
+                await Task.Delay(600);   // показать перевод перед закрытием
+                if (win.IsVisible) win.DialogResult = true;
+            }
+            catch (Exception ex)
+            {
+                status.Text = $"Couldn't translate: {ex.Message} Write the description in English or try again.";
+                status.Visibility = Visibility.Visible;
+            }
+            finally
+            {
+                if (win.IsVisible)
+                {
+                    ok.Content = okContent;
+                    ok.IsEnabled = box.IsEnabled = true;
+                    UpdateTranslateButton();
+                    box.Focus();
+                }
+            }
+        };
         win.Loaded += (_, _) => { box.Focus(); box.CaretIndex = box.Text.Length; };
         return Themed(win).ShowDialog() == true ? box.Text : null;
     }

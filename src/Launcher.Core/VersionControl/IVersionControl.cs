@@ -9,6 +9,15 @@ public sealed class P4Exception : Exception
 }
 
 /// <summary>
+/// Итог sync. WritableNotUpdated: файлы, которые p4 не стал перезаписывать («Can't clobber writable file»):
+/// они не взяты в checkout, но доступны на запись (обычно Unreal сохранил их через «Make Writable»).
+/// </summary>
+public sealed record SyncResult(IReadOnlyList<string> WritableNotUpdated)
+{
+    public static readonly SyncResult Clean = new(Array.Empty<string>());
+}
+
+/// <summary>
 /// Абстракция над системой контроля версий. Сейчас есть одна реализация (Perforce),
 /// но UI и ChangeWatcher зависят только от этого интерфейса.
 /// </summary>
@@ -19,9 +28,11 @@ public interface IVersionControl
     /// <summary>Фактические пользователь и сервер (с учётом p4 set / P4CONFIG), для строки состояния.</summary>
     Task<(string User, string Server)> GetConnectionInfoAsync(ProjectProfile profile, CancellationToken ct = default);
     Task<WorkspaceInfo> GetWorkspaceAsync(ProjectProfile profile, string clientName, CancellationToken ct = default);
-    Task SyncAsync(ProjectProfile profile, IProgress<string>? progress, CancellationToken ct = default);
+    Task<SyncResult> SyncAsync(ProjectProfile profile, IProgress<string>? progress, CancellationToken ct = default);
     /// <summary>Синхронизировать воркспейс на состояние конкретного changelist'а (откат или промежуточная версия).</summary>
-    Task SyncToChangeAsync(ProjectProfile profile, long changeId, IProgress<string>? progress, CancellationToken ct = default);
+    Task<SyncResult> SyncToChangeAsync(ProjectProfile profile, long changeId, IProgress<string>? progress, CancellationToken ct = default);
+    /// <summary>p4 sync -f: перезаписать указанные локальные файлы версией из депо (head или @changeId).</summary>
+    Task ForceSyncFilesAsync(ProjectProfile profile, IReadOnlyList<string> localPaths, long? changeId, IProgress<string>? progress, CancellationToken ct = default);
     Task LoginAsync(ProjectProfile profile, string password, CancellationToken ct = default);
     /// <summary>Сколько осталось жить тикету; null — не залогинен (тикета нет или истёк).</summary>
     Task<TimeSpan?> GetTicketRemainingAsync(ProjectProfile profile, CancellationToken ct = default);

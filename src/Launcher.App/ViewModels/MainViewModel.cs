@@ -481,6 +481,7 @@ public sealed class MainViewModel : ObservableObject
         if (EditorRunning() && !_dialogs.Confirm("Unreal Editor is running. Getting latest may fail on files the editor has locked.\n\nContinue?")) return;
 
         var changedBuildFiles = new List<string>();
+        IReadOnlyList<string> writable = Array.Empty<string>();
         await RunBusyAsync("Getting latest…", cancellable: true, async ct =>
         {
             Output = "";
@@ -491,9 +492,11 @@ public sealed class MainViewModel : ObservableObject
                 if (BuildFileRx.Match(line) is { Success: true } m) changedBuildFiles.Add(m.Groups["name"].Value);
                 if (CodeFileRx.IsMatch(line)) _codeSyncedAt[vm.Model.Id] = DateTime.Now;
             });
-            await _vcs.SyncAsync(vm.Model, progress, ct);
-            AppendOutput("Get latest finished.");
+            var result = await _vcs.SyncAsync(vm.Model, progress, ct);
+            writable = result.WritableNotUpdated;
+            AppendOutput(writable.Count == 0 ? "Get latest finished." : $"Get latest finished, {writable.Count} writable file(s) not updated.");
         });
+        if (writable.Count > 0) await ResolveWritableFilesAsync(vm, writable, changeId: null);
         _watcher.ResetNotified(vm.Model.Id);
 
         if (changedBuildFiles.Count > 0)
@@ -504,6 +507,56 @@ public sealed class MainViewModel : ObservableObject
         await CheckAsync(vm);
         await UpdateBuildStateAsync(force: true);
         if (vm == Selected && NeedsBuild) AppendOutput($"C++ code changed: {BuildState.Summary}. Press Build Project so Unreal runs the new code.");
+    }
+
+    /// <summary>
+    /// p4 не перезаписал файлы, доступные на запись без checkout (обычно Unreal сохранил их через «Make Writable»).
+    /// Спрашиваем: взять версию с сервера (локальные копии сначала уходят в резервную папку) или оставить свои.
+    /// </summary>
+    private async Task ResolveWritableFilesAsync(ProfileViewModel vm, IReadOnlyList<string> files, long? changeId)
+    {
+        var root = vm.Model.WorkspaceRoot;
+        var list = string.Join(Environment.NewLine, files.Take(8).Select(f => "  " + ProfilePaths.ToRelative(root, f)));
+        var more = files.Count > 8 ? $"{Environment.NewLine}  …and {files.Count - 8} more" : "";
+        var choice = _dialogs.Choose(
+            files.Count == 1 ? "1 file wasn't updated" : $"{files.Count} files weren't updated",
+            "Perforce didn't overwrite these files: they are writable on your disk but not checked out " +
+            "(usually Unreal saved them with \"Make Writable\"). Everything else was synced." +
+            $"{Environment.NewLine}{Environment.NewLine}{list}{more}{Environment.NewLine}{Environment.NewLine}" +
+            "Get Server Version: replace them with the depot version. Your copies are backed up first." +
+            $"{Environment.NewLine}Keep Mine: leave them as they are (they stay out of date; check them out if you meant to change them).",
+            "Get Server Version", "Keep Mine");
+        if (choice != 0)
+        {
+            AppendOutput($"Kept {files.Count} local writable file(s); they are not updated.");
+            return;
+        }
+
+        await RunBusyAsync("Replacing writable files…", cancellable: false, async ct =>
+        {
+            var backup = BackupFiles(vm, files);
+            AppendOutput($"Local copies backed up to {backup}");
+            await _vcs.ForceSyncFilesAsync(vm.Model, files, changeId, new Progress<string>(AppendOutput), ct);
+            AppendOutput($"{files.Count} file(s) replaced with the depot version.");
+        });
+    }
+
+    /// <summary>Копии файлов в %LocalAppData%\PerforceLauncher\Backups\Проект\время\относительный_путь (вне воркспейса, чтобы не попасть в reconcile).</summary>
+    private static string BackupFiles(ProfileViewModel vm, IReadOnlyList<string> files)
+    {
+        var safeName = string.Concat(vm.Name.Select(c => System.IO.Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
+        var dir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "PerforceLauncher", "Backups", safeName, DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss"));
+        foreach (var f in files)
+        {
+            if (!System.IO.File.Exists(f)) continue;
+            var rel = ProfilePaths.ToRelative(vm.Model.WorkspaceRoot, f);
+            if (System.IO.Path.IsPathRooted(rel)) rel = rel.Replace(":", "");   // файл вне корня воркспейса
+            var target = System.IO.Path.Combine(dir, rel.TrimStart('\\', '/'));
+            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(target)!);
+            System.IO.File.Copy(f, target, overwrite: true);
+        }
+        return dir;
     }
 
     private async Task SyncToChangeAsync(HistoryEntry? entry)
@@ -518,17 +571,20 @@ public sealed class MainViewModel : ObservableObject
         if (!ok) return;
         if (EditorRunning() && !_dialogs.Confirm("Unreal Editor is running and may lock files. Continue?")) return;
 
+        IReadOnlyList<string> writable = Array.Empty<string>();
         await RunBusyAsync($"Syncing to CL {entry.Id}…", cancellable: true, async ct =>
         {
             Output = "";
             AppendOutput($"> p4 sync @{entry.Id} ({vm.Subtitle})");
-            await _vcs.SyncToChangeAsync(vm.Model, entry.Id, new Progress<string>(line =>
+            var result = await _vcs.SyncToChangeAsync(vm.Model, entry.Id, new Progress<string>(line =>
             {
                 AppendOutput(line);
                 if (CodeFileRx.IsMatch(line)) _codeSyncedAt[vm.Model.Id] = DateTime.Now;
             }), ct);
-            AppendOutput($"Workspace is now at CL {entry.Id}.");
+            writable = result.WritableNotUpdated;
+            AppendOutput($"Workspace is now at CL {entry.Id}" + (writable.Count > 0 ? $", except {writable.Count} writable file(s)." : "."));
         });
+        if (writable.Count > 0) await ResolveWritableFilesAsync(vm, writable, entry.Id);
         _watcher.ResetNotified(vm.Model.Id);
         await CheckAsync(vm);
         await UpdateBuildStateAsync(force: true);

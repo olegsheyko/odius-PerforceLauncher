@@ -37,6 +37,8 @@ powershell -File build-exe.ps1      # -> dist\PerforceLauncher.exe (не обн�
 - **Статус**: Up to date / N new commits / Sign in required; сводка Synced · On server · Local changes.
 - **Launch Unreal** (Ctrl+Enter) с версией движка, **Open in Rider / Visual Studio**, **Generate Project Files**, свои команды.
 - **Get Latest** с отменой; после синка — подсказка перегенерировать project files, если изменились `.Build.cs`/`.Target.cs`/`.uproject`/`.uplugin`.
+  Если Perforce не перезаписал файлы, доступные на запись без checkout («Can't clobber writable file»), лаунчер показывает их список
+  и предлагает взять версию с сервера (локальные копии сначала сохраняются в `%LocalAppData%\PerforceLauncher\Backups`) или оставить свои.
 - **Build Project**: лаунчер сам замечает, что C++ код новее собранных DLL (после Get Latest здесь, в P4V или в Unreal) — показывает подсказку,
   а при «Launch Unreal» предлагает «Build and Launch / Launch Anyway / Cancel». Сборка — `Build.bat` движка (инкрементально, как Build в IDE), с прогрессом и отменой;
   Blueprint-only проекты не затрагиваются.

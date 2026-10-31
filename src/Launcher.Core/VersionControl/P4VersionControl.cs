@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using System.Text.Json.Nodes;
 using PerforceLauncher.Core.Models;
 
@@ -110,19 +111,44 @@ public sealed class P4VersionControl : IVersionControl
             .ToList();
     }
 
-    public Task SyncAsync(ProjectProfile profile, IProgress<string>? progress, CancellationToken ct = default) =>
-        SyncTargetAsync(profile, Scope(profile), progress, ct);
+    public Task<SyncResult> SyncAsync(ProjectProfile profile, IProgress<string>? progress, CancellationToken ct = default) =>
+        SyncTargetAsync(profile, new[] { Scope(profile) }, progress, ct);
 
-    public Task SyncToChangeAsync(ProjectProfile profile, long changeId, IProgress<string>? progress, CancellationToken ct = default) =>
-        SyncTargetAsync(profile, $"{Scope(profile)}@{changeId}", progress, ct);
+    public Task<SyncResult> SyncToChangeAsync(ProjectProfile profile, long changeId, IProgress<string>? progress, CancellationToken ct = default) =>
+        SyncTargetAsync(profile, new[] { $"{Scope(profile)}@{changeId}" }, progress, ct);
 
-    private async Task SyncTargetAsync(ProjectProfile profile, string target, IProgress<string>? progress, CancellationToken ct)
+    public async Task ForceSyncFilesAsync(ProjectProfile profile, IReadOnlyList<string> localPaths, long? changeId, IProgress<string>? progress, CancellationToken ct = default)
     {
-        var args = Prefix(profile, tagged: false).Concat(new[] { "sync", target });
-        var res = await ProcessRunner.RunAsync(P4Exe(), args, onLine: l => progress?.Report(l), ct: ct);
-        if (res.ExitCode != 0)
-            throw Wrap(string.Join(Environment.NewLine, res.StdErr.Concat(res.StdOut)));
+        var rev = changeId is { } c ? $"@{c}" : "";
+        foreach (var chunk in localPaths.Chunk(50))
+        {
+            var r = await SyncTargetAsync(profile, chunk.Select(f => EscapePath(f) + rev).Prepend("-f").ToArray(), progress, ct);
+            if (r.WritableNotUpdated.Count > 0)   // с -f такого быть не должно, но молча не теряем
+                throw new P4Exception("Perforce still refused to overwrite: " + string.Join(", ", r.WritableNotUpdated));
+        }
     }
+
+    private static readonly Regex ClobberRx = new(@"^Can't clobber writable file (?<path>.+?)\s*$", RegexOptions.IgnoreCase);
+
+    private async Task<SyncResult> SyncTargetAsync(ProjectProfile profile, string[] syncArgs, IProgress<string>? progress, CancellationToken ct)
+    {
+        var args = Prefix(profile, tagged: false).Concat(syncArgs.Prepend("sync"));
+        var res = await ProcessRunner.RunAsync(P4Exe(), args, onLine: l => progress?.Report(l), ct: ct);
+        if (res.ExitCode == 0) return SyncResult.Clean;
+
+        // Остальные файлы при этом синкнуты: «не стал перезаписывать» — не ошибка sync, а вопрос пользователю.
+        var errors = res.StdErr.Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
+        var writable = errors.Select(l => ClobberRx.Match(l)).Where(m => m.Success).Select(m => m.Groups["path"].Value).ToList();
+        var other = errors.Where(l => !ClobberRx.IsMatch(l)).ToList();
+        if (writable.Count > 0 && other.Count == 0) return new SyncResult(writable);
+        // В сообщение — только ошибки: весь вывод sync (сотни строк «updating …») уже есть в журнале.
+        throw Wrap(other.Count > 0 ? string.Join(Environment.NewLine, other.Take(20))
+            : string.Join(Environment.NewLine, res.StdOut.TakeLast(5)));
+    }
+
+    /// <summary>Локальный путь как аргумент p4: символы ревизий/шаблонов экранируются (%40 %23 %2A %25).</summary>
+    private static string EscapePath(string path) =>
+        path.Replace("%", "%25").Replace("@", "%40").Replace("#", "%23").Replace("*", "%2A");
 
     public async Task LoginAsync(ProjectProfile profile, string password, CancellationToken ct = default)
     {

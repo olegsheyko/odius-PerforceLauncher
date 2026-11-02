@@ -29,6 +29,11 @@ public partial class MainWindow : Window
 
         // Pending-файлы группируются по changelist'ам (порядок групп = порядок элементов).
         CollectionViewSource.GetDefaultView(vm.PendingFiles).GroupDescriptions.Add(new PropertyGroupDescription(nameof(PendingFileViewModel.Header)));
+        vm.PendingSelectionRestored += rows =>
+        {
+            PendingList.SelectedItems.Clear();
+            foreach (var row in rows) PendingList.SelectedItems.Add(row);
+        };
         Activated += (_, _) => _vm.OnWindowActivated();
         vm.IsWindowShown = () => IsVisible && WindowState != WindowState.Minimized;
         StateChanged += (_, _) => UpdateMaximizedLayout();
@@ -158,9 +163,15 @@ public partial class MainWindow : Window
     /// <summary>Меню «Move To»: default, существующие pending CL и «New changelist...».</summary>
     private void MoveButton_Click(object sender, RoutedEventArgs e)
     {
+        var files = _vm.MoveSource();
+        if (files.Count == 0) return;
         var menu = new ContextMenu { PlacementTarget = MoveButton, Placement = PlacementMode.Bottom };
+        // Сразу видно, что именно переносится: выделенные файлы или весь выбранный changelist.
+        menu.Items.Add(new MenuItem { Header = files.Count == 1 ? "Move 1 file to:" : $"Move {files.Count} files to:", IsEnabled = false });
+        var from = files.Select(f => f.Change).Distinct().ToList();
         foreach (var cl in _vm.Changelists)
         {
+            if (from.Count == 1 && from[0] == cl.Id) continue;   // файлы уже там
             var first = cl.Description.Split('\n')[0].Trim();
             var header = cl.IsDefault ? "Default changelist" : $"CL {cl.Id}: {first}";
             var id = cl.Id;

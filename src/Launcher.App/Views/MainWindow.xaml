@@ -403,7 +403,8 @@
                                     <Button Content="Reconcile Offline Work" Command="{Binding ReconcileCommand}"
                                             ToolTip="Find files changed outside Perforce (edited without checkout, added or deleted) and open them for submit"/>
                                     <Button Content="New Changelist…" Command="{Binding NewChangelistCommand}"/>
-                                    <Button x:Name="MoveButton" Content="Move To  ▾" Click="MoveButton_Click" ToolTip="Move the selected files to another changelist"/>
+                                    <Button x:Name="MoveButton" Content="Move To  ▾" Click="MoveButton_Click" IsEnabled="{Binding CanMoveFiles}" ToolTipService.ShowOnDisabled="True"
+                                            ToolTip="Move the selected files (or all files of the selected changelist) to another changelist"/>
                                     <Button Content="Edit Description…" Command="{Binding EditDescriptionCommand}"/>
                                     <Button Content="Delete Changelist" Command="{Binding DeleteChangelistCommand}" ToolTip="Delete an empty numbered changelist"/>
                                     <Button Content="Revert…" Command="{Binding RevertCommand}" ToolTip="Discard local changes in the selected files"/>

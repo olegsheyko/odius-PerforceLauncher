@@ -173,6 +173,7 @@ public sealed class MainViewModel : ObservableObject
         get => _selectedPending;
         set
         {
+            if (_rebuildingPending) return;   // список пересобирается: выделение восстановит RefreshPendingAsync
             _selectedPending = value ?? Array.Empty<PendingFileViewModel>();
             // Выделили файлы одного changelist'а — он и становится выбранным (и остаётся им после снятия выделения).
             var ids = _selectedPending.Select(f => f.ChangelistId).Distinct().ToList();
@@ -181,6 +182,17 @@ public sealed class MainViewModel : ObservableObject
         }
     }
     private IReadOnlyList<PendingFileViewModel> _selectedPending = Array.Empty<PendingFileViewModel>();
+    private bool _rebuildingPending;
+    /// <summary>Список Pending пересобран: окно заново выделяет эти строки (те же файлы, но новые объекты).</summary>
+    public event Action<IReadOnlyList<PendingFileViewModel>>? PendingSelectionRestored;
+
+    /// <summary>Что переносит Move To: выделенные файлы, а если их нет, все файлы выбранного changelist'а.</summary>
+    public IReadOnlyList<OpenedFile> MoveSource()
+    {
+        var files = SelectedFilesOnly();
+        return files.Count > 0 ? files : ResolveTargetChangelist()?.Files ?? Array.Empty<OpenedFile>();
+    }
+    public bool CanMoveFiles => MoveSource().Count > 0;
 
     // Выбранный changelist: клик по заголовку или по его файлу.
     private long? _selectedChangelistId;
@@ -211,6 +223,7 @@ public sealed class MainViewModel : ObservableObject
         var target = ResolveTargetChangelist()?.Id;
         foreach (var h in _headers) h.IsSelected = h.Id == target;
         OnPropertyChanged(nameof(SubmitButtonText));
+        OnPropertyChanged(nameof(CanMoveFiles));
         CommandManager.InvalidateRequerySuggested();
     }
     public string PendingHeader => "Pending";
@@ -325,7 +338,7 @@ public sealed class MainViewModel : ObservableObject
         RefreshPendingCommand = new AsyncRelayCommand(_ => RefreshPendingAsync(), _ => Selected != null);
         ReconcileCommand = new AsyncRelayCommand(_ => ReconcileAsync(), _ => Selected != null);
         NewChangelistCommand = new AsyncRelayCommand(_ => NewChangelistAsync(), _ => Selected != null);
-        MoveToCommand = new AsyncRelayCommand(MoveToAsync, _ => SelectedFilesOnly().Count > 0);
+        MoveToCommand = new AsyncRelayCommand(MoveToAsync, _ => CanMoveFiles);
         RevertCommand = new AsyncRelayCommand(_ => RevertAsync(), _ => SelectedFilesOnly().Count > 0);
         SubmitCommand = new AsyncRelayCommand(_ => SubmitAsync(), _ => Selected != null && ResolveTargetChangelist() != null);
         EditDescriptionCommand = new AsyncRelayCommand(_ => EditDescriptionAsync(), _ => ResolveTargetChangelist() is { IsDefault: false });
@@ -863,18 +876,27 @@ public sealed class MainViewModel : ObservableObject
             var list = await _vcs.GetPendingAsync(vm.Model);
             if (vm != Selected) return;   // за время запроса сменили профиль
             _changelists = list;
-            PendingFiles.Clear();
-            _headers.Clear();
-            var root = vm.Model.WorkspaceRoot;
-            foreach (var cl in list)
+            // Список обновляется и сам (например, при возврате в окно), поэтому выделенные файлы должны это пережить.
+            var keep = _selectedPending.Where(f => f.File != null).Select(f => f.File!.DepotPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            _rebuildingPending = true;
+            try
             {
-                if (cl.Files.Count == 0 && cl.IsDefault) continue;   // пустой default не показываем
-                var header = new ChangelistHeaderViewModel(cl);
-                _headers.Add(header);
-                if (cl.Files.Count == 0) PendingFiles.Add(new PendingFileViewModel(header, null, "(empty changelist)"));
-                foreach (var f in cl.Files)
-                    PendingFiles.Add(new PendingFileViewModel(header, f, ProfilePaths.ToRelative(root, f.LocalPath)));
+                PendingFiles.Clear();
+                _headers.Clear();
+                var root = vm.Model.WorkspaceRoot;
+                foreach (var cl in list)
+                {
+                    if (cl.Files.Count == 0 && cl.IsDefault) continue;   // пустой default не показываем
+                    var header = new ChangelistHeaderViewModel(cl);
+                    _headers.Add(header);
+                    if (cl.Files.Count == 0) PendingFiles.Add(new PendingFileViewModel(header, null, "(empty changelist)"));
+                    foreach (var f in cl.Files)
+                        PendingFiles.Add(new PendingFileViewModel(header, f, ProfilePaths.ToRelative(root, f.LocalPath)));
+                }
             }
+            finally { _rebuildingPending = false; }
+            _selectedPending = PendingFiles.Where(f => f.File != null && keep.Contains(f.File.DepotPath)).ToList();
+            if (_selectedPending.Count > 0) PendingSelectionRestored?.Invoke(_selectedPending);
             // Выбранный changelist переживает обновление списка, если он ещё существует.
             if (_selectedChangelistId is { } sel && list.All(c => c.Id != sel)) _selectedChangelistId = null;
             PendingError = "";
@@ -953,7 +975,7 @@ public sealed class MainViewModel : ObservableObject
     /// <param name="parameter">Id целевого changelist'а (0 = default) или -1 для «новый».</param>
     private async Task MoveToAsync(object? parameter)
     {
-        var files = SelectedFilesOnly();
+        var files = MoveSource();
         if (files.Count == 0) return;
         var target = Convert.ToInt64(parameter);
         var profile = Selected!.Model;

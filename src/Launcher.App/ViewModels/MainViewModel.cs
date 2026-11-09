@@ -1233,7 +1233,7 @@ public sealed class MainViewModel : ObservableObject
         foreach (var g in visible.GroupBy(f => f.User, StringComparer.OrdinalIgnoreCase)
                      .OrderByDescending(g => IsMe(g.Key)).ThenByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
         {
-            var rows = g.OrderBy(f => f.DepotPath, StringComparer.OrdinalIgnoreCase)
+            var rows = g.OrderBy(f => CheckoutRank(f.DepotPath)).ThenBy(f => f.DepotPath, StringComparer.OrdinalIgnoreCase)
                 .Select(f => new CheckoutFileViewModel(f, FolderOf(f.DepotPath, strip), CopyToClipboard)).ToList();
             var expanded = filtering || (_checkoutExpanded.TryGetValue(g.Key, out var remembered) ? remembered : expandByDefault);
             var group = new UserCheckoutViewModel(g.Key, IsMe(g.Key), rows, expanded, CopyToClipboard);
@@ -1248,6 +1248,17 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(CheckoutEmpty));
         OnPropertyChanged(nameof(CheckoutEmptyTitle));
         OnPropertyChanged(nameof(CheckoutEmptyHint));
+    }
+
+    /// <summary>Порядок файлов в группе: Content, потом Source, потом всё остальное, а сгенерированное (Intermediate, Binaries…) в самом конце.</summary>
+    private static int CheckoutRank(string depotPath)
+    {
+        var segments = depotPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var dirs = segments.Take(segments.Length - 1).ToList();
+        if (dirs.Any(d => d is "Intermediate" or "Binaries" or "Saved" or "DerivedDataCache")) return 3;
+        if (dirs.Any(d => d.Equals("Content", StringComparison.OrdinalIgnoreCase))) return 0;
+        if (dirs.Any(d => d.Equals("Source", StringComparison.OrdinalIgnoreCase))) return 1;
+        return 2;
     }
 
     private void SetAllCheckoutsExpanded(bool expanded)

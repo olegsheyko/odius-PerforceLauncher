@@ -222,6 +222,20 @@ public sealed class P4VersionControl : IVersionControl
 
     // ---------- pending changes / submit ----------
 
+    private const int MaxCheckedOut = 20000;
+
+    public async Task<IReadOnlyList<CheckedOutFile>> GetCheckedOutAsync(ProjectProfile profile, CancellationToken ct = default)
+    {
+        var rows = await RunTaggedAsync(profile, ct, "opened", "-a", "-m", MaxCheckedOut.ToString(), Scope(profile));
+        return rows.Select(o =>
+        {
+            long.TryParse(Str(o, "change"), out var change);   // "default" -> 0
+            int.TryParse(Str(o, "rev"), out var rev);
+            return new CheckedOutFile(Str(o, "depotFile"), Str(o, "user"), Str(o, "client"), Str(o, "action"), change,
+                Str(o, "type"), rev, o.ContainsKey("ourLock"));
+        }).Where(f => f.DepotPath.Length > 0 && f.User.Length > 0).ToList();
+    }
+
     public async Task<IReadOnlyList<PendingChangelist>> GetPendingAsync(ProjectProfile profile, CancellationToken ct = default)
     {
         var opened = (await RunTaggedAsync(profile, ct, "opened"))

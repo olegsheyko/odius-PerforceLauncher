@@ -53,6 +53,8 @@ public interface IVersionControl
     // ---------- pending changes / submit (как в P4V) ----------
 
     /// <summary>Открытые файлы, сгруппированные по changelist'ам (default первым).</summary>
+    /// <summary>Все файлы в области проекта, которые сейчас открыты (checkout) кем угодно: p4 opened -a.</summary>
+    Task<IReadOnlyList<CheckedOutFile>> GetCheckedOutAsync(ProjectProfile profile, CancellationToken ct = default);
     Task<IReadOnlyList<PendingChangelist>> GetPendingAsync(ProjectProfile profile, CancellationToken ct = default);
     /// <summary>Находит изменения вне Perforce (правки без checkout, новые/удалённые файлы) и открывает их в default.</summary>
     Task ReconcileAsync(ProjectProfile profile, IProgress<string>? progress, CancellationToken ct = default);

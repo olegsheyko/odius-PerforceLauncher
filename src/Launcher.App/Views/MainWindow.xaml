@@ -548,6 +548,190 @@
                             </DockPanel>
                         </TabItem>
 
+                        <!-- Кто что держит: открытые (checkout) файлы всех пользователей, по людям -->
+                        <TabItem x:Name="CheckoutTab">
+                            <TabItem.Header>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="Checked Out"/>
+                                    <Border Style="{StaticResource CountBadge}" Visibility="{Binding CheckoutBadge, Converter={StaticResource HasValueToVis}}"
+                                            ToolTip="Files currently checked out by other people">
+                                        <TextBlock Text="{Binding CheckoutBadge}" FontSize="11" FontWeight="SemiBold"/>
+                                    </Border>
+                                </StackPanel>
+                            </TabItem.Header>
+                            <DockPanel Margin="0,12,0,0">
+                                <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10">
+                                    <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Content="&#xE72C;" Command="{Binding RefreshCheckoutsCommand}"
+                                            Margin="8,0,0,0" ToolTip="Reload (also reloads when you return to the launcher)"/>
+                                    <Button DockPanel.Dock="Right" Content="Collapse All" Command="{Binding CollapseAllCheckoutsCommand}" Margin="8,0,0,0" Padding="10,5"/>
+                                    <Button DockPanel.Dock="Right" Content="Expand All" Command="{Binding ExpandAllCheckoutsCommand}" Margin="8,0,0,0" Padding="10,5"/>
+                                    <ToggleButton DockPanel.Dock="Right" Content="Locked only" IsChecked="{Binding CheckoutLockedOnly, Mode=TwoWay}" Margin="8,0,0,0" Padding="10,5"
+                                                  ToolTip="Show only files locked against other people's edits"/>
+                                    <ToggleButton DockPanel.Dock="Right" Content="Others only" IsChecked="{Binding CheckoutOthersOnly, Mode=TwoWay}" Margin="8,0,0,0" Padding="10,5"
+                                                  ToolTip="Hide your own files"/>
+                                    <Grid>
+                                        <TextBox Text="{Binding CheckoutFilter, UpdateSourceTrigger=PropertyChanged}" Padding="32,6,8,6"
+                                                 ToolTip="Filters by file path, person, workspace, action or CL number. Several words must all match."/>
+                                        <TextBlock Text="&#xE721;" Style="{StaticResource Glyph}" FontSize="12" Foreground="{StaticResource TextMuted}"
+                                                   Margin="12,0,0,0" IsHitTestVisible="False"/>
+                                        <TextBlock Text="Search by file, person or CL" Foreground="{StaticResource TextMuted}"
+                                                   IsHitTestVisible="False" VerticalAlignment="Center" Margin="34,0,0,0"
+                                                   Visibility="{Binding CheckoutFilter, Converter={StaticResource HasValueToVis}, ConverterParameter=invert}"/>
+                                    </Grid>
+                                </DockPanel>
+                                <TextBlock DockPanel.Dock="Top" Margin="2,0,0,8" FontSize="12" Foreground="{StaticResource TextMuted}">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Text" Value="{Binding CheckoutSummary}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding CheckoutBusy}" Value="True"><Setter Property="Text" Value="Loading…"/></DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                <TextBlock DockPanel.Dock="Top" Text="{Binding CheckoutError}" Foreground="{StaticResource Danger}" TextWrapping="Wrap" Margin="0,0,0,6"
+                                           Visibility="{Binding CheckoutError, Converter={StaticResource HasValueToVis}}"/>
+                                <Grid>
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                        <ItemsControl ItemsSource="{Binding CheckoutGroups}" Margin="0,0,8,4">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Margin="0,0,0,8" CornerRadius="10" Background="#0AFFFFFF" BorderBrush="{StaticResource CardBorder}" BorderThickness="1">
+                                                        <StackPanel>
+                                                            <!-- Заголовок человека: клик раскрывает/сворачивает его файлы -->
+                                                            <ToggleButton IsChecked="{Binding IsExpanded, Mode=TwoWay}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Cursor="Hand"
+                                                                          ToolTip="Show or hide this person's files">
+                                                                <ToggleButton.Template>
+                                                                    <ControlTemplate TargetType="ToggleButton">
+                                                                        <Border x:Name="Head" Background="Transparent" CornerRadius="10" Padding="12,10,12,10">
+                                                                            <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Center"/>
+                                                                        </Border>
+                                                                        <ControlTemplate.Triggers>
+                                                                            <Trigger Property="IsMouseOver" Value="True">
+                                                                                <Setter TargetName="Head" Property="Background" Value="{StaticResource HoverBg}"/>
+                                                                            </Trigger>
+                                                                        </ControlTemplate.Triggers>
+                                                                    </ControlTemplate>
+                                                                </ToggleButton.Template>
+                                                                <DockPanel>
+                                                                    <TextBlock DockPanel.Dock="Left" FontSize="11" Width="18"
+                                                                               Foreground="{StaticResource TextMuted}" VerticalAlignment="Center">
+                                                                        <TextBlock.Style>
+                                                                            <Style TargetType="TextBlock" BasedOn="{StaticResource Glyph}">
+                                                                                <Setter Property="Text" Value="&#xE76C;"/>
+                                                                                <Style.Triggers>
+                                                                                    <DataTrigger Binding="{Binding IsExpanded}" Value="True"><Setter Property="Text" Value="&#xE70D;"/></DataTrigger>
+                                                                                </Style.Triggers>
+                                                                            </Style>
+                                                                        </TextBlock.Style>
+                                                                    </TextBlock>
+                                                                    <Border DockPanel.Dock="Left" Width="30" Height="30" CornerRadius="15" Background="{Binding AvatarBrush}" Margin="0,0,12,0">
+                                                                        <TextBlock Text="{Binding Initials}" FontSize="11.5" FontWeight="SemiBold" Foreground="#F4F4F5"
+                                                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                                    </Border>
+                                                                    <Border DockPanel.Dock="Right" Style="{StaticResource CountBadge}">
+                                                                        <TextBlock Text="{Binding CountText}" FontSize="11"/>
+                                                                    </Border>
+                                                                    <TextBlock DockPanel.Dock="Right" Text="{Binding WorkspacesText}" ToolTip="{Binding WorkspacesTooltip}"
+                                                                               Foreground="{StaticResource TextMuted}" FontSize="12" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                                                    <Border DockPanel.Dock="Right" Style="{StaticResource CountBadge}" Background="#26F5B547"
+                                                                            Visibility="{Binding HasLocked, Converter={StaticResource BoolToVis}}"
+                                                                            ToolTip="Files locked against other people's edits">
+                                                                        <StackPanel Orientation="Horizontal">
+                                                                            <TextBlock Text="&#xE72E;" Style="{StaticResource Glyph}" FontSize="10" Foreground="{StaticResource Warn}" Margin="0,0,5,0"/>
+                                                                            <TextBlock Text="{Binding LockedText}" FontSize="11" Foreground="{StaticResource Warn}"/>
+                                                                        </StackPanel>
+                                                                    </Border>
+                                                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                                        <TextBlock Text="{Binding User}" FontWeight="SemiBold" FontSize="14"/>
+                                                                        <Border Style="{StaticResource CountBadge}" Visibility="{Binding IsMe, Converter={StaticResource BoolToVis}}">
+                                                                            <TextBlock Text="You" FontSize="11" FontWeight="SemiBold"/>
+                                                                        </Border>
+                                                                    </StackPanel>
+                                                                </DockPanel>
+                                                                <ToggleButton.ContextMenu>
+                                                                    <ContextMenu>
+                                                                        <MenuItem Header="Copy User Name" Command="{Binding CopyUserCommand}"/>
+                                                                    </ContextMenu>
+                                                                </ToggleButton.ContextMenu>
+                                                            </ToggleButton>
+
+                                                            <!-- Файлы человека создаются только в раскрытом виде: свёрнутые группы ничего не стоят -->
+                                                            <ContentControl>
+                                                                <ContentControl.Style>
+                                                                    <Style TargetType="ContentControl">
+                                                                        <Style.Triggers>
+                                                                            <DataTrigger Binding="{Binding IsExpanded}" Value="True">
+                                                                                <Setter Property="Content" Value="{Binding}"/>
+                                                                                <Setter Property="ContentTemplate">
+                                                                                    <Setter.Value>
+                                                                                        <DataTemplate>
+                                                                                            <StackPanel>
+                                                                                                <Border Height="1" Background="{StaticResource Divider}" Margin="12,0,12,4"/>
+                                                                                                <ItemsControl ItemsSource="{Binding Files}" Margin="6,0,6,6">
+                                                                                                    <ItemsControl.ItemTemplate>
+                                                                                                        <DataTemplate>
+                                                                                                            <Border x:Name="Row" Background="Transparent" CornerRadius="6" Padding="8,6">
+                                                                                                                <Border.ContextMenu>
+                                                                                                                    <ContextMenu>
+                                                                                                                        <MenuItem Header="Copy Depot Path" Command="{Binding CopyPathCommand}"/>
+                                                                                                                        <MenuItem Header="Copy File Name" Command="{Binding CopyNameCommand}"/>
+                                                                                                                    </ContextMenu>
+                                                                                                                </Border.ContextMenu>
+                                                                                                                <Grid ToolTip="{Binding DepotPath}">
+                                                                                                                    <Grid.ColumnDefinitions>
+                                                                                                                        <ColumnDefinition Width="62"/>
+                                                                                                                        <ColumnDefinition Width="20"/>
+                                                                                                                        <ColumnDefinition Width="*"/>
+                                                                                                                        <ColumnDefinition Width="Auto"/>
+                                                                                                                    </Grid.ColumnDefinitions>
+                                                                                                                    <TextBlock Text="{Binding Action}" FontSize="11" FontWeight="SemiBold" Foreground="{Binding ActionBrush}"
+                                                                                                                               VerticalAlignment="Center"/>
+                                                                                                                    <TextBlock Grid.Column="1" Text="&#xE72E;" Style="{StaticResource Glyph}" FontSize="11" Foreground="{StaticResource Warn}"
+                                                                                                                               ToolTip="Locked: nobody else can edit this file until it is submitted or reverted"
+                                                                                                                               Visibility="{Binding IsLocked, Converter={StaticResource BoolToVis}}"/>
+                                                                                                                    <StackPanel Grid.Column="2" Margin="0,0,12,0">
+                                                                                                                        <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis"/>
+                                                                                                                        <TextBlock Text="{Binding Folder}" FontSize="11.5" Foreground="{StaticResource TextMuted}" TextTrimming="CharacterEllipsis"/>
+                                                                                                                    </StackPanel>
+                                                                                                                    <StackPanel Grid.Column="3" HorizontalAlignment="Right" VerticalAlignment="Center">
+                                                                                                                        <TextBlock Text="{Binding ChangeText}" FontSize="12" Foreground="{StaticResource TextSecondary}" HorizontalAlignment="Right"/>
+                                                                                                                        <TextBlock Text="{Binding Detail}" FontSize="11" Foreground="{StaticResource TextMuted}" HorizontalAlignment="Right"/>
+                                                                                                                    </StackPanel>
+                                                                                                                </Grid>
+                                                                                                            </Border>
+                                                                                                            <DataTemplate.Triggers>
+                                                                                                                <Trigger SourceName="Row" Property="IsMouseOver" Value="True">
+                                                                                                                    <Setter TargetName="Row" Property="Background" Value="{StaticResource HoverBg}"/>
+                                                                                                                </Trigger>
+                                                                                                            </DataTemplate.Triggers>
+                                                                                                        </DataTemplate>
+                                                                                                    </ItemsControl.ItemTemplate>
+                                                                                                </ItemsControl>
+                                                                                            </StackPanel>
+                                                                                        </DataTemplate>
+                                                                                    </Setter.Value>
+                                                                                </Setter>
+                                                                            </DataTrigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </ContentControl.Style>
+                                                            </ContentControl>
+                                                        </StackPanel>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </ScrollViewer>
+                                    <StackPanel Style="{StaticResource EmptyState}" Visibility="{Binding CheckoutEmpty, Converter={StaticResource BoolToVis}}">
+                                        <TextBlock Text="&#xE77B;" Style="{StaticResource Glyph}" FontSize="22" Foreground="{StaticResource TextMuted}" HorizontalAlignment="Center"/>
+                                        <TextBlock Text="{Binding CheckoutEmptyTitle}" FontSize="14" FontWeight="SemiBold" Margin="0,10,0,2" HorizontalAlignment="Center"/>
+                                        <TextBlock Text="{Binding CheckoutEmptyHint}" Foreground="{StaticResource TextMuted}" HorizontalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center"/>
+                                    </StackPanel>
+                                </Grid>
+                            </DockPanel>
+                        </TabItem>
+
                         <!-- История -->
                         <TabItem x:Name="HistoryTab" Header="History">
                             <Grid Margin="0,12,0,0">

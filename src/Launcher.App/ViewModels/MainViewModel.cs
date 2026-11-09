@@ -299,6 +299,9 @@ public sealed class MainViewModel : ObservableObject
 
         HistoryView = CollectionViewSource.GetDefaultView(_history);
         HistoryView.Filter = o => o is HistoryEntry h && h.Matches(_historyFilter.Trim());
+        RefreshCheckoutsCommand = new AsyncRelayCommand(_ => LoadCheckoutsAsync(), _ => Selected != null && !CheckoutBusy);
+        ExpandAllCheckoutsCommand = new RelayCommand(_ => SetAllCheckoutsExpanded(true));
+        CollapseAllCheckoutsCommand = new RelayCommand(_ => SetAllCheckoutsExpanded(false));
         RefreshHistoryCommand = new AsyncRelayCommand(_ => LoadHistoryAsync(reset: true), _ => Selected != null);
         LoadMoreHistoryCommand = new AsyncRelayCommand(_ => LoadHistoryAsync(reset: false), _ => Selected != null && HistoryHasMore);
 
@@ -382,7 +385,10 @@ public sealed class MainViewModel : ObservableObject
             ClearPending();
             _ = RefreshPendingAsync();
             ClearHistory();
+            ClearCheckouts();
+            _checkoutExpanded.Clear();
             if (_historyTabActive) EnsureHistoryLoaded();
+            if (_checkoutTabActive) EnsureCheckoutsFresh();
             OnPropertyChanged(nameof(ConnectionText));
             if (value != null) _ = LoadConnectionAsync(value);
             BuildState = BuildState.NoCode;
@@ -706,6 +712,7 @@ public sealed class MainViewModel : ObservableObject
     public void OnWindowActivated()
     {
         RefreshPendingIfStale();
+        if (_checkoutTabActive) EnsureCheckoutsFresh();
         if (!IsBusy) _ = UpdateBuildStateAsync();
     }
 
@@ -1104,6 +1111,180 @@ public sealed class MainViewModel : ObservableObject
             await RefreshPendingAsync();
             await CheckAsync(vm);
         }
+    }
+
+    // ---------- checked out: кто что держит (p4 opened -a) ----------
+
+    private IReadOnlyList<CheckedOutFile> _checkoutAll = Array.Empty<CheckedOutFile>();
+    private readonly Dictionary<string, bool> _checkoutExpanded = new(StringComparer.OrdinalIgnoreCase);
+    private string _checkoutMe = "";
+    private string _checkoutFilter = "";
+    private bool _checkoutOthersOnly;
+    private bool _checkoutLockedOnly;
+    private bool _checkoutBusy;
+    private bool _checkoutLoaded;
+    private bool _checkoutTabActive;
+    private string _checkoutError = "";
+    private string _checkoutSummary = "";
+    private string _checkoutBadge = "";
+    private DateTime _checkoutLoadedAt = DateTime.MinValue;
+
+    public ObservableCollection<UserCheckoutViewModel> CheckoutGroups { get; } = new();
+    public ICommand RefreshCheckoutsCommand { get; private set; } = null!;
+    public ICommand ExpandAllCheckoutsCommand { get; private set; } = null!;
+    public ICommand CollapseAllCheckoutsCommand { get; private set; } = null!;
+
+    public string CheckoutFilter { get => _checkoutFilter; set { if (Set(ref _checkoutFilter, value)) ApplyCheckoutFilter(); } }
+    public bool CheckoutOthersOnly { get => _checkoutOthersOnly; set { if (Set(ref _checkoutOthersOnly, value)) ApplyCheckoutFilter(); } }
+    public bool CheckoutLockedOnly { get => _checkoutLockedOnly; set { if (Set(ref _checkoutLockedOnly, value)) ApplyCheckoutFilter(); } }
+    public bool CheckoutBusy { get => _checkoutBusy; private set => Set(ref _checkoutBusy, value); }
+    public string CheckoutError { get => _checkoutError; private set { if (Set(ref _checkoutError, value)) OnPropertyChanged(nameof(CheckoutEmpty)); } }
+    /// <summary>«12 files · 4 people · 2 locked»: по всем открытым файлам, независимо от фильтра.</summary>
+    public string CheckoutSummary { get => _checkoutSummary; private set => Set(ref _checkoutSummary, value); }
+    /// <summary>Число на вкладке: сколько файлов открыто у других (чужие правки — то, что важно знать).</summary>
+    public string CheckoutBadge { get => _checkoutBadge; private set => Set(ref _checkoutBadge, value); }
+    /// <summary>Список загружен, но показывать нечего: никто ничего не держит или всё скрыто фильтром.</summary>
+    public bool CheckoutEmpty => _checkoutLoaded && CheckoutGroups.Count == 0 && CheckoutError.Length == 0;
+    public string CheckoutEmptyTitle => _checkoutAll.Count == 0 ? "Nothing is checked out" : "No files match the filters";
+    public string CheckoutEmptyHint => _checkoutAll.Count == 0
+        ? "Files that you or your teammates open for edit will show up here, grouped by person."
+        : "Clear the search or switch off the filters above.";
+
+    /// <summary>Вызывается из code-behind при переключении вкладок.</summary>
+    public void SetCheckoutTabActive(bool active)
+    {
+        _checkoutTabActive = active;
+        if (active) EnsureCheckoutsFresh();
+    }
+
+    private void EnsureCheckoutsFresh()
+    {
+        if (Selected == null || _checkoutBusy) return;
+        if (!_checkoutLoaded || DateTime.UtcNow - _checkoutLoadedAt > TimeSpan.FromSeconds(30)) _ = LoadCheckoutsAsync();
+    }
+
+    private void ClearCheckouts()
+    {
+        _checkoutAll = Array.Empty<CheckedOutFile>();
+        CheckoutGroups.Clear();
+        _checkoutLoaded = false;
+        _checkoutLoadedAt = DateTime.MinValue;
+        CheckoutError = "";
+        CheckoutSummary = "";
+        CheckoutBadge = "";
+        OnPropertyChanged(nameof(CheckoutEmpty));
+    }
+
+    private async Task LoadCheckoutsAsync()
+    {
+        var vm = Selected;
+        if (vm == null || _checkoutBusy) return;
+        CheckoutBusy = true;
+        try
+        {
+            var me = !string.IsNullOrWhiteSpace(vm.Model.P4User) ? vm.Model.P4User : (await _vcs.GetConnectionInfoAsync(vm.Model)).User;
+            var files = await _vcs.GetCheckedOutAsync(vm.Model);
+            if (vm != Selected) return;   // за время запроса сменили профиль
+            _checkoutMe = me;
+            _checkoutAll = files;
+            _checkoutLoaded = true;
+            _checkoutLoadedAt = DateTime.UtcNow;
+            CheckoutError = "";
+            var others = files.Count(f => !IsMe(f.User));
+            CheckoutBadge = others > 0 ? others.ToString() : "";
+            var people = files.Select(f => f.User).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+            var locked = files.Count(f => f.IsLocked);
+            CheckoutSummary = files.Count == 0 ? "" :
+                $"{files.Count} file{(files.Count == 1 ? "" : "s")} · {people} {(people == 1 ? "person" : "people")}" + (locked > 0 ? $" · {locked} locked" : "");
+            ApplyCheckoutFilter();
+        }
+        catch (Exception ex)
+        {
+            if (vm != Selected) return;
+            _checkoutLoaded = true;
+            CheckoutError = ex.Message;
+        }
+        finally { CheckoutBusy = false; }
+    }
+
+    private bool IsMe(string user) => string.Equals(user, _checkoutMe, StringComparison.OrdinalIgnoreCase);
+
+    private bool MatchesCheckoutFilter(CheckedOutFile f, string[] words)
+    {
+        if (_checkoutOthersOnly && IsMe(f.User)) return false;
+        if (_checkoutLockedOnly && !f.IsLocked) return false;
+        // Каждое слово поиска должно найтись в пути, пользователе, workspace, действии или номере CL.
+        return words.All(w => f.DepotPath.Contains(w, StringComparison.OrdinalIgnoreCase) || f.User.Contains(w, StringComparison.OrdinalIgnoreCase) ||
+                              f.Client.Contains(w, StringComparison.OrdinalIgnoreCase) || f.Action.Contains(w, StringComparison.OrdinalIgnoreCase) ||
+                              (f.Change != 0 && f.Change.ToString().Contains(w)));
+    }
+
+    /// <summary>Пересобирает группы: я первым, дальше по числу файлов. Раскрытость групп запоминается по пользователю.</summary>
+    private void ApplyCheckoutFilter()
+    {
+        var words = _checkoutFilter.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var filtering = words.Length > 0;
+        var strip = CommonDepotPrefixLength(_checkoutAll);
+        var visible = _checkoutAll.Where(f => MatchesCheckoutFilter(f, words)).ToList();
+
+        // По умолчанию раскрыто всё, пока файлов немного; при поиске раскрываем найденное, чтобы результат был виден.
+        var expandByDefault = visible.Count <= 60 || filtering;
+        CheckoutGroups.Clear();
+        foreach (var g in visible.GroupBy(f => f.User, StringComparer.OrdinalIgnoreCase)
+                     .OrderByDescending(g => IsMe(g.Key)).ThenByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            var rows = g.OrderBy(f => f.DepotPath, StringComparer.OrdinalIgnoreCase)
+                .Select(f => new CheckoutFileViewModel(f, FolderOf(f.DepotPath, strip), CopyToClipboard)).ToList();
+            var expanded = filtering || (_checkoutExpanded.TryGetValue(g.Key, out var remembered) ? remembered : expandByDefault);
+            var group = new UserCheckoutViewModel(g.Key, IsMe(g.Key), rows, expanded, CopyToClipboard);
+            var user = g.Key;
+            group.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(UserCheckoutViewModel.IsExpanded) && _checkoutFilter.Trim().Length == 0)
+                    _checkoutExpanded[user] = group.IsExpanded;
+            };
+            CheckoutGroups.Add(group);
+        }
+        OnPropertyChanged(nameof(CheckoutEmpty));
+        OnPropertyChanged(nameof(CheckoutEmptyTitle));
+        OnPropertyChanged(nameof(CheckoutEmptyHint));
+    }
+
+    private void SetAllCheckoutsExpanded(bool expanded)
+    {
+        foreach (var g in CheckoutGroups) g.IsExpanded = expanded;
+    }
+
+    /// <summary>Сколько начальных символов пути (//депо/ветка/) общие у всех файлов: их прячем, оставляя значимую часть.</summary>
+    private static int CommonDepotPrefixLength(IReadOnlyList<CheckedOutFile> files)
+    {
+        if (files.Count == 0) return 0;
+        var dirs = files.Select(f => f.DepotPath[..(f.DepotPath.LastIndexOf('/') + 1)]).Distinct().ToList();
+        var first = dirs[0];
+        var common = first.Length;
+        foreach (var d in dirs.Skip(1))
+        {
+            var i = 0;
+            while (i < common && i < d.Length && char.ToLowerInvariant(first[i]) == char.ToLowerInvariant(d[i])) i++;
+            common = i;
+        }
+        // Прячем общее начало, но не больше двух уровней после «//»: глубже начинается осмысленная часть пути.
+        var slashes = 0;
+        var lastCommonSlash = 0;
+        for (var i = 0; i < common; i++)
+        {
+            if (first[i] != '/') continue;
+            lastCommonSlash = i + 1;
+            if (++slashes == 4) break;   // «//depot/branch/» — четыре слэша
+        }
+        return lastCommonSlash;
+    }
+
+    private static string FolderOf(string depotPath, int strip)
+    {
+        var dir = depotPath[..(depotPath.LastIndexOf('/') + 1)];
+        dir = strip > 0 && strip <= dir.Length ? dir[strip..] : dir.TrimStart('/');
+        return dir.TrimEnd('/');
     }
 
     // ---------- history: logic ----------

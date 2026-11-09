@@ -110,6 +110,12 @@ public sealed record OpenedFile(string DepotPath, string LocalPath, string Actio
 public sealed record ChangeFile(string DepotPath, string Action, int Rev, string Type);
 
 /// <summary>Pending changelist воркспейса. Id == 0 — default changelist (всегда присутствует).</summary>
+/// <summary>Файл, открытый (checkout) кем-то в депо: из «p4 opened -a».</summary>
+public sealed record CheckedOutFile(string DepotPath, string User, string Client, string Action, long Change, string Type, int Rev, bool IsLocked)
+{
+    public string FileName => DepotPath[(DepotPath.LastIndexOf('/') + 1)..];
+}
+
 public sealed record PendingChangelist(long Id, string Description, IReadOnlyList<OpenedFile> Files)
 {
     public bool IsDefault => Id == 0;

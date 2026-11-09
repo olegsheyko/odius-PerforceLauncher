@@ -119,6 +119,7 @@ public partial class MainWindow : Window
     {
         if (!ReferenceEquals(e.OriginalSource, MainTabs)) return;
         _vm.SetHistoryTabActive(ReferenceEquals(MainTabs.SelectedItem, HistoryTab));
+        _vm.SetCheckoutTabActive(ReferenceEquals(MainTabs.SelectedItem, CheckoutTab));
     }
 
     /// <summary>Клик по заголовку changelist'а: выбрать его целиком (выделение файлов снимается).</summary>

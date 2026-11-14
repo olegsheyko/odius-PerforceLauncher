@@ -65,8 +65,11 @@ public sealed class PendingFileViewModel
 
     /// <summary>Файл под правилом P4IGNORE, но уже в депо: reconcile/edit его открывает, а коммитить обычно не нужно.</summary>
     public bool IsIgnored => File?.IsIgnored == true;
-    public string Marker => IsIgnored ? "⚠" : "";
-    public string MarkerTip => IsIgnored
+    public bool NeedsResolve => File?.NeedsResolve == true;
+    public string Marker => NeedsResolve ? "⇄" : IsIgnored ? "⚠" : "";
+    public string MarkerTip => NeedsResolve
+        ? "Needs resolving: somebody else submitted a newer version while you had this file open.\nUse Resolve… to choose what to keep. Submit is blocked until then."
+        : IsIgnored
         ? $"Matches .p4ignore ({File!.IgnoredBy}) but is already tracked in the depot.\nUsually a generated/local file: revert it or move it to a separate changelist instead of submitting."
         : "";
 }

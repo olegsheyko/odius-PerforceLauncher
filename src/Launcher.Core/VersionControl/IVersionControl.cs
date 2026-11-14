@@ -55,6 +55,20 @@ public interface IVersionControl
     /// <summary>Открытые файлы, сгруппированные по changelist'ам (default первым).</summary>
     /// <summary>Все файлы в области проекта, которые сейчас открыты (checkout) кем угодно: p4 opened -a.</summary>
     Task<IReadOnlyList<CheckedOutFile>> GetCheckedOutAsync(ProjectProfile profile, CancellationToken ct = default);
+    // ---------- resolve / merge ----------
+
+    /// <summary>Открытые файлы, которым нужен resolve (p4 fstat -Ru), с описанием чужой ревизии.</summary>
+    Task<IReadOnlyList<UnresolvedFile>> GetUnresolvedAsync(ProjectProfile profile, CancellationToken ct = default);
+    /// <summary>p4 resolve -at/-ay/-am для файлов; по каждому — разрешён ли он после операции.</summary>
+    Task<IReadOnlyList<ResolveOutcome>> ResolveAsync(ProjectProfile profile, IReadOnlyList<UnresolvedFile> files, ResolveMode mode, IProgress<string>? progress, CancellationToken ct = default);
+    /// <summary>Сохранить содержимое ревизии (p4 print) в файл: для P4Merge (база и «их» версия).</summary>
+    Task PrintRevisionAsync(ProjectProfile profile, string depotPath, int rev, string outputFile, CancellationToken ct = default);
+
+    // ---------- активность ----------
+
+    /// <summary>Сабмиты в области проекта с указанной даты (для карты активности).</summary>
+    Task<IReadOnlyList<CommitActivity>> GetActivityAsync(ProjectProfile profile, DateTime since, CancellationToken ct = default);
+
     Task<IReadOnlyList<PendingChangelist>> GetPendingAsync(ProjectProfile profile, CancellationToken ct = default);
     /// <summary>Находит изменения вне Perforce (правки без checkout, новые/удалённые файлы) и открывает их в default.</summary>
     Task ReconcileAsync(ProjectProfile profile, IProgress<string>? progress, CancellationToken ct = default);

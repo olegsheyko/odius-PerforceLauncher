@@ -236,6 +236,89 @@ public sealed class P4VersionControl : IVersionControl
         }).Where(f => f.DepotPath.Length > 0 && f.User.Length > 0).ToList();
     }
 
+    // ---------- resolve / merge ----------
+
+    public async Task<IReadOnlyList<UnresolvedFile>> GetUnresolvedAsync(ProjectProfile profile, CancellationToken ct = default)
+    {
+        // -Ru: только файлы, которым нужен resolve; -Or: данные об интеграции (база и источник слияния).
+        var rows = await RunTaggedAsync(profile, ct, "fstat", "-Ru", "-Or", Scope(profile));
+        var authors = new Dictionary<long, (string User, string Desc)>();
+        var result = new List<UnresolvedFile>();
+        foreach (var o in rows)
+        {
+            var depot = Str(o, "depotFile");
+            if (depot.Length == 0) continue;
+            int.TryParse(Str(o, "haveRev"), out var have);
+            int.TryParse(Str(o, "headRev"), out var head);
+            long.TryParse(Str(o, "headChange"), out var headChange);
+            // После sync данных об интеграции может не быть: база = ревизия, с которой вы начали, «их» = head.
+            var baseFile = Str(o, "resolveBaseFile0"); if (baseFile.Length == 0) baseFile = depot;
+            int.TryParse(Str(o, "resolveBaseRev0"), out var baseRev); if (baseRev == 0) baseRev = have;
+            var fromFile = Str(o, "resolveFromFile0"); if (fromFile.Length == 0) fromFile = depot;
+            int.TryParse(Str(o, "resolveEndFromRev0"), out var fromRev); if (fromRev == 0) fromRev = head;
+            var kind = Str(o, "resolveAction0"); if (kind.Length == 0) kind = "merge";
+
+            string user = "", desc = "";
+            if (headChange > 0)
+            {
+                if (!authors.TryGetValue(headChange, out var info) && authors.Count < 40)
+                {
+                    try
+                    {
+                        var d = (await RunTaggedAsync(profile, ct, "describe", "-s", headChange.ToString())).FirstOrDefault();
+                        info = (Str(d, "user"), Str(d, "desc").Trim());
+                    }
+                    catch (P4Exception) { info = ("", ""); }   // описание вторично: без него resolve всё равно работает
+                    authors[headChange] = info;
+                }
+                (user, desc) = authors.TryGetValue(headChange, out var known) ? known : ("", "");
+            }
+            result.Add(new UnresolvedFile(depot, ToLocalPath(profile, Str(o, "clientFile"), depot), Str(o, "type"), Str(o, "action"), kind,
+                baseFile, baseRev, fromFile, fromRev, have, head, headChange, user, desc));
+        }
+        return result.OrderBy(f => f.LocalPath, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    public async Task<IReadOnlyList<ResolveOutcome>> ResolveAsync(ProjectProfile profile, IReadOnlyList<UnresolvedFile> files, ResolveMode mode,
+        IProgress<string>? progress, CancellationToken ct = default)
+    {
+        var flag = mode switch { ResolveMode.AcceptTheirs => "-at", ResolveMode.AcceptYours => "-ay", _ => "-am" };
+        var output = new List<string>();
+        foreach (var chunk in files.Chunk(50))
+        {
+            var args = Prefix(profile, tagged: false).Concat(new[] { "resolve", flag }.Concat(chunk.Select(f => EscapePath(f.LocalPath))));
+            var res = await ProcessRunner.RunAsync(P4Exe(), args, onLine: l => { lock (output) output.Add(l); progress?.Report(l); }, ct: ct);
+            // «Пропущено» и конфликты — не ошибка процесса; настоящая ошибка (нет доступа и т.п.) приходит в stderr при пустом результате.
+            if (res.ExitCode != 0 && res.StdOut.Count == 0)
+                throw Wrap(string.Join(Environment.NewLine, res.StdErr));
+        }
+
+        // Что осталось нерешённым — спрашиваем у сервера: вывод resolve на разных версиях p4 отличается.
+        var remaining = (await GetUnresolvedAsync(profile, ct)).Select(f => f.DepotPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return files.Select(f =>
+        {
+            var resolved = !remaining.Contains(f.DepotPath);
+            var name = Path.GetFileName(f.LocalPath);
+            var line = output.LastOrDefault(l => l.Contains(name, StringComparison.OrdinalIgnoreCase)) ?? "";
+            return new ResolveOutcome(f.DepotPath, resolved, resolved ? "" : (line.Length > 0 ? line.Trim() : "Not resolved (conflicting changes)."));
+        }).ToList();
+    }
+
+    public async Task PrintRevisionAsync(ProjectProfile profile, string depotPath, int rev, string outputFile, CancellationToken ct = default)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(outputFile)!);
+        await RunUntaggedAsync(profile, null, ct, "print", "-q", "-o", outputFile, $"{EscapePath(depotPath)}#{rev}");
+    }
+
+    // ---------- активность ----------
+
+    public async Task<IReadOnlyList<CommitActivity>> GetActivityAsync(ProjectProfile profile, DateTime since, CancellationToken ct = default)
+    {
+        // Без -l: описания не нужны, запрос дешёвый даже для тысяч сабмитов.
+        var changes = await QueryChangesAsync(profile, ct, "-s", "submitted", "-m", "20000", $"{Scope(profile)}@{since.ToString("yyyy/MM/dd", System.Globalization.CultureInfo.InvariantCulture)},@now");
+        return changes.Select(c => new CommitActivity(c.Time, c.User)).ToList();
+    }
+
     public async Task<IReadOnlyList<PendingChangelist>> GetPendingAsync(ProjectProfile profile, CancellationToken ct = default)
     {
         var opened = (await RunTaggedAsync(profile, ct, "opened"))
@@ -259,6 +342,16 @@ public sealed class P4VersionControl : IVersionControl
             var ignored = await FindIgnoredAsync(profile, candidates, ct);
             if (ignored.Count > 0)
                 opened = opened.Select(f => ignored.TryGetValue(f.LocalPath, out var rule) ? f with { IgnoredBy = rule } : f).ToList();
+        }
+        catch (P4Exception) { }
+
+        // Файлы, которым нужен resolve (после sync): их нельзя сабмитить, пока не решены. Сбой запроса не ломает список.
+        try
+        {
+            var unresolved = (await RunTaggedAsync(profile, ct, "fstat", "-Ru", "-T", "depotFile", Scope(profile)))
+                .Select(r => Str(r, "depotFile")).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (unresolved.Count > 0)
+                opened = opened.Select(f => unresolved.Contains(f.DepotPath) ? f with { NeedsResolve = true } : f).ToList();
         }
         catch (P4Exception) { }
 

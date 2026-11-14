@@ -391,6 +391,14 @@ public sealed class DialogService : IDialogService
         return w;
     }
 
+    public void ShowResolve(ResolveViewModel vm)
+    {
+        var win = new ResolveWindow(vm);
+        if (Owner is { IsVisible: true } owner) win.Owner = owner;
+        else win.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        win.ShowDialog();
+    }
+
     public int Choose(string title, string message, params string[] buttons)
     {
         var choice = -1;

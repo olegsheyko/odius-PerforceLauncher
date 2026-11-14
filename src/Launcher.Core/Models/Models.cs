@@ -67,6 +67,8 @@ public sealed class AppSettings
     public bool StartMinimized { get; set; } = true;
     /// <summary>Общее уведомление о новых коммитах при входе в систему и после выхода из сна.</summary>
     public bool RemindOnWake { get; set; } = true;
+    /// <summary>Показывать карту активности (сабмиты по дням) на главном экране проекта.</summary>
+    public bool ShowActivity { get; set; } = true;
     /// <summary>Положение и размер главного окна между запусками.</summary>
     public WindowPlacement? Window { get; set; }
     public Guid? SelectedProfileId { get; set; }
@@ -101,10 +103,35 @@ public sealed record VcsStatus(
 
 /// <summary>Файл, открытый в воркспейсе (p4 opened). Change == 0 — default changelist.</summary>
 /// <remarks>IgnoredBy != null: файл подпадает под P4IGNORE, но уже находится в депо (формат «файл:строка:правило»).</remarks>
-public sealed record OpenedFile(string DepotPath, string LocalPath, string Action, long Change, string Type, int Rev, string? IgnoredBy = null)
+public sealed record OpenedFile(string DepotPath, string LocalPath, string Action, long Change, string Type, int Rev, string? IgnoredBy = null, bool NeedsResolve = false)
 {
     public bool IsIgnored => IgnoredBy != null;
 }
+
+/// <summary>Как разрешить конфликт: p4 resolve -at / -ay / -am.</summary>
+public enum ResolveMode { AcceptTheirs, AcceptYours, AutoMerge }
+
+/// <summary>
+/// Открытый файл, который нужно resolve (после sync, когда в депо появилась новая ревизия, а у вас файл открыт).
+/// Base/From: что сливается (по умолчанию база = ревизия, на которой вы начали, «их» = head).
+/// </summary>
+public sealed record UnresolvedFile(
+    string DepotPath, string LocalPath, string Type, string Action, string ResolveKind,
+    string BaseFile, int BaseRev, string FromFile, int FromRev, int HaveRev, int HeadRev,
+    long HeadChange, string HeadUser, string HeadDescription)
+{
+    public string FileName => DepotPath[(DepotPath.LastIndexOf('/') + 1)..];
+    /// <summary>Текстовый файл: его можно слить автоматически или в P4Merge. Бинарные (uasset, umap) — только «мой» или «их».</summary>
+    public bool IsText => Type.StartsWith("text", StringComparison.OrdinalIgnoreCase) || Type.StartsWith("unicode", StringComparison.OrdinalIgnoreCase)
+                          || Type.StartsWith("utf8", StringComparison.OrdinalIgnoreCase) || Type.StartsWith("utf16", StringComparison.OrdinalIgnoreCase)
+                          || Type.StartsWith("symlink", StringComparison.OrdinalIgnoreCase);
+}
+
+/// <summary>Результат p4 resolve по одному файлу: строки вывода и осталось ли нерешённое.</summary>
+public sealed record ResolveOutcome(string DepotPath, bool Resolved, string Message);
+
+/// <summary>Один сабмит для карты активности.</summary>
+public sealed record CommitActivity(DateTime Time, string User);
 
 /// <summary>Файл внутри submitted-changelist'а (p4 describe).</summary>
 public sealed record ChangeFile(string DepotPath, string Action, int Rev, string Type);

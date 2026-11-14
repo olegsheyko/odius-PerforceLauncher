@@ -24,6 +24,8 @@ public interface IDialogService
     (string Password, bool Remember)? PromptPassword(string message, bool rememberDefault);
     bool EditSettings(AppSettings settings);
     bool Confirm(string message);
+    /// <summary>Окно Resolve (модальное): конфликты после sync.</summary>
+    void ShowResolve(ResolveViewModel vm);
     /// <summary>Выбор из нескольких кнопок (первая — основная, последняя — отмена). Индекс кнопки или -1.</summary>
     int Choose(string title, string message, params string[] buttons);
     void Error(string message);
@@ -167,6 +169,11 @@ public sealed class MainViewModel : ObservableObject
 
     public ObservableCollection<PendingFileViewModel> PendingFiles { get; } = new();
     public IReadOnlyList<PendingChangelist> Changelists => _changelists;
+    /// <summary>Файлы, которым нужен resolve: их изменил и кто-то ещё; submit без resolve невозможен.</summary>
+    public int UnresolvedCount => _changelists.Sum(c => c.Files.Count(f => f.NeedsResolve));
+    public bool HasUnresolved => UnresolvedCount > 0;
+    public string UnresolvedText => UnresolvedCount == 1 ? "1 file needs resolving" : $"{UnresolvedCount} files need resolving";
+    public ICommand ResolveCommand { get; private set; } = null!;
     /// <summary>Выделенные строки списка; выставляется из code-behind.</summary>
     public IReadOnlyList<PendingFileViewModel> SelectedPending
     {
@@ -299,6 +306,9 @@ public sealed class MainViewModel : ObservableObject
 
         HistoryView = CollectionViewSource.GetDefaultView(_history);
         HistoryView.Filter = o => o is HistoryEntry h && h.Matches(_historyFilter.Trim());
+        ToggleActivityCommand = new RelayCommand(_ => ShowActivity = !ShowActivity);
+        RefreshActivityCommand = new AsyncRelayCommand(_ => LoadActivityAsync(force: true), _ => Selected != null && !Activity.IsBusy);
+        ResolveCommand = new AsyncRelayCommand(_ => OpenResolveAsync(), _ => Selected != null && !IsBusy);
         RefreshCheckoutsCommand = new AsyncRelayCommand(_ => LoadCheckoutsAsync(), _ => Selected != null && !CheckoutBusy);
         ExpandAllCheckoutsCommand = new RelayCommand(_ => SetAllCheckoutsExpanded(true));
         CollapseAllCheckoutsCommand = new RelayCommand(_ => SetAllCheckoutsExpanded(false));
@@ -387,6 +397,8 @@ public sealed class MainViewModel : ObservableObject
             ClearHistory();
             ClearCheckouts();
             _checkoutExpanded.Clear();
+            Activity.Clear();
+            if (value != null) _ = LoadActivityAsync(force: true);
             if (_historyTabActive) EnsureHistoryLoaded();
             if (_checkoutTabActive) EnsureCheckoutsFresh();
             OnPropertyChanged(nameof(ConnectionText));
@@ -524,6 +536,8 @@ public sealed class MainViewModel : ObservableObject
             _syncHint = (vm.Model.Id, $"sync:{DateTime.Now.Ticks}", $"Build files changed ({names}). Regenerate project files so your IDE picks them up.");
         }
         await CheckAsync(vm);
+        await RefreshPendingAsync();
+        if (vm == Selected && HasUnresolved) AppendOutput($"{UnresolvedText}: press Resolve… to choose what to keep.");
         await UpdateBuildStateAsync(force: true);
         if (vm == Selected && NeedsBuild) AppendOutput($"C++ code changed: {BuildState.Summary}. Press Build Project so Unreal runs the new code.");
     }
@@ -563,19 +577,7 @@ public sealed class MainViewModel : ObservableObject
     /// <summary>Копии файлов в %LocalAppData%\PerforceLauncher\Backups\Проект\время\относительный_путь (вне воркспейса, чтобы не попасть в reconcile).</summary>
     private static string BackupFiles(ProfileViewModel vm, IReadOnlyList<string> files)
     {
-        var safeName = string.Concat(vm.Name.Select(c => System.IO.Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
-        var dir = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "PerforceLauncher", "Backups", safeName, DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss"));
-        foreach (var f in files)
-        {
-            if (!System.IO.File.Exists(f)) continue;
-            var rel = ProfilePaths.ToRelative(vm.Model.WorkspaceRoot, f);
-            if (System.IO.Path.IsPathRooted(rel)) rel = rel.Replace(":", "");   // файл вне корня воркспейса
-            var target = System.IO.Path.Combine(dir, rel.TrimStart('\\', '/'));
-            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(target)!);
-            System.IO.File.Copy(f, target, overwrite: true);
-        }
-        return dir;
+        return LocalBackup.Save(vm.Name, vm.Model.WorkspaceRoot, files);
     }
 
     private async Task SyncToChangeAsync(HistoryEntry? entry)
@@ -642,6 +644,10 @@ public sealed class MainViewModel : ObservableObject
         if (vm != null)
         {
             var id = vm.Model.Id;
+            if (UnresolvedCount > 0)
+                candidates.Add(($"resolve:{id}:{UnresolvedCount}",
+                    $"{UnresolvedText}: you and a teammate both changed {(UnresolvedCount == 1 ? "it" : "them")}. Submit is blocked until you resolve.",
+                    "Resolve…", () => ResolveCommand.Execute(null)));
             if (_buildState.NeedsBuild)
                 candidates.Add(($"build:{id}:{_buildState.Summary}",
                     $"C++ code changed since your last build: {_buildState.Summary}. Unreal will run the old code until you build.",
@@ -712,6 +718,7 @@ public sealed class MainViewModel : ObservableObject
     public void OnWindowActivated()
     {
         RefreshPendingIfStale();
+        _ = LoadActivityAsync(force: false);
         if (_checkoutTabActive) EnsureCheckoutsFresh();
         if (!IsBusy) _ = UpdateBuildStateAsync();
     }
@@ -919,6 +926,22 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(PendingCount));
         OnPropertyChanged(nameof(PendingCountText));
         OnPropertyChanged(nameof(Changelists));
+        OnPropertyChanged(nameof(UnresolvedCount));
+        OnPropertyChanged(nameof(HasUnresolved));
+        OnPropertyChanged(nameof(UnresolvedText));
+        UpdateHint();
+    }
+
+    /// <summary>Окно Resolve для выбранного проекта; после закрытия список Pending и подсказки обновляются.</summary>
+    private async Task OpenResolveAsync()
+    {
+        var vm = Selected;
+        if (vm == null) return;
+        var rvm = new ResolveViewModel(_vcs, vm.Model, vm.Name, P4Locator.Resolve(_settings.P4Path), _dialogs, () => _ = RefreshPendingAsync());
+        await rvm.LoadAsync();
+        _dialogs.ShowResolve(rvm);
+        await RefreshPendingAsync();
+        if (rvm.Items.Count > 0 && rvm.AllDone) AppendOutput($"Resolved {rvm.Items.Count} file(s). You can submit now.");
     }
 
     private List<OpenedFile> SelectedFilesOnly() =>
@@ -1042,6 +1065,16 @@ public sealed class MainViewModel : ObservableObject
         var cl = _changelists.FirstOrDefault(c => c.Id == targetId);
         if (cl == null) { _dialogs.Error("The changelist no longer exists."); return; }
         if (cl.Files.Count == 0) { _dialogs.Error($"{cl.Title} has no files to submit."); return; }
+        var toResolve = cl.Files.Count(f => f.NeedsResolve);
+        if (toResolve > 0)
+        {
+            // p4 не даст сабмитить нерешённые файлы: сразу ведём на resolve вместо ошибки сервера.
+            var pick = _dialogs.Choose("Resolve first",
+                $"{(toResolve == 1 ? "1 file" : toResolve + " files")} in {cl.Title} must be resolved before submitting: somebody else submitted a newer version while you had {(toResolve == 1 ? "it" : "them")} open.",
+                "Resolve…", "Cancel");
+            if (pick == 0) await OpenResolveAsync();
+            return;
+        }
 
         // Файлы под P4IGNORE, но уже в депо: коммит изменит их для всей команды. Спрашиваем явно (по умолчанию «No»).
         var ignored = cl.Files.Where(f => f.IsIgnored).ToList();
@@ -1108,9 +1141,49 @@ public sealed class MainViewModel : ObservableObject
         {
             // Даже при ошибке файлы остались в нумерованном CL — обновляем список и статус.
             _watcher.ResetNotified(profile.Id);
+            _ = LoadActivityAsync(force: true);   // свой сабмит сразу попадает на карту
             await RefreshPendingAsync();
             await CheckAsync(vm);
         }
+    }
+
+    // ---------- карта активности: сабмиты по дням за год ----------
+
+    public ActivityViewModel Activity { get; } = new();
+    public ICommand ToggleActivityCommand { get; private set; } = null!;
+    public ICommand RefreshActivityCommand { get; private set; } = null!;
+
+    public bool ShowActivity
+    {
+        get => _settings.ShowActivity;
+        set
+        {
+            if (_settings.ShowActivity == value) return;
+            _settings.ShowActivity = value;
+            _store.Save(_settings);
+            OnPropertyChanged();
+            if (value) _ = LoadActivityAsync(force: false);
+        }
+    }
+
+    private async Task LoadActivityAsync(bool force)
+    {
+        var vm = Selected;
+        if (vm == null || !ShowActivity || Activity.IsBusy) return;
+        if (!force && Activity.IsLoaded && DateTime.UtcNow - Activity.LoadedAt < TimeSpan.FromMinutes(10)) return;
+        Activity.IsBusy = true;
+        try
+        {
+            var me = !string.IsNullOrWhiteSpace(vm.Model.P4User) ? vm.Model.P4User : (await _vcs.GetConnectionInfoAsync(vm.Model)).User;
+            var commits = await _vcs.GetActivityAsync(vm.Model, ActivityViewModel.RangeStart(DateTime.Today));
+            if (vm != Selected) return;   // за время запроса сменили проект
+            Activity.SetData(commits, me);
+        }
+        catch (Exception ex)
+        {
+            if (vm == Selected) Activity.Error = ex.Message;   // карта вторична: ошибка не должна мешать работе
+        }
+        finally { Activity.IsBusy = false; }
     }
 
     // ---------- checked out: кто что держит (p4 opened -a) ----------

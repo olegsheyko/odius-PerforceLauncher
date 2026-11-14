@@ -293,7 +293,8 @@
                 </StackPanel>
 
                 <!-- Запуск -->
-                <WrapPanel Grid.Row="3" Margin="0,20,0,0">
+                <StackPanel Grid.Row="3">
+                <WrapPanel Margin="0,20,0,0">
                     <Button Style="{StaticResource PrimaryButton}" Command="{Binding PrimaryAction.Command}" MinWidth="230" Padding="18,9" Margin="0,0,10,0"
                             ToolTip="{Binding PrimaryAction.ToolTipText}" ToolTipService.ShowOnDisabled="True" HorizontalContentAlignment="Left">
                         <StackPanel Orientation="Horizontal">
@@ -334,6 +335,96 @@
                         </StackPanel>
                     </Button>
                 </WrapPanel>
+                    <!-- Карта активности: сабмиты по дням, как contributions на GitHub -->
+                    <Border Style="{StaticResource Card}" Margin="0,14,0,0" Padding="16,8,12,10">
+                        <StackPanel>
+                            <DockPanel>
+                                <Button DockPanel.Dock="Right" Command="{Binding ToggleActivityCommand}" Width="26" Height="26" FontSize="10"
+                                        ToolTip="Show or hide the activity map">
+                                    <Button.Style>
+                                        <Style TargetType="Button" BasedOn="{StaticResource IconButton}">
+                                            <Setter Property="Content" Value="&#xE70E;"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding ShowActivity}" Value="False"><Setter Property="Content" Value="&#xE70D;"/></DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                </Button>
+                                <Button DockPanel.Dock="Right" Command="{Binding RefreshActivityCommand}" Style="{StaticResource IconButton}" Width="26" Height="26" FontSize="11"
+                                        Content="&#xE72C;" ToolTip="Reload the activity map" Margin="0,0,4,0"
+                                        Visibility="{Binding ShowActivity, Converter={StaticResource BoolToVis}}"/>
+                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,12,0"
+                                            Visibility="{Binding ShowActivity, Converter={StaticResource BoolToVis}}">
+                                    <TextBlock Text="Less" FontSize="10" Foreground="{StaticResource TextMuted}" Margin="0,0,5,0" VerticalAlignment="Center"/>
+                                    <Border Width="10" Height="10" Margin="1" CornerRadius="2" Background="#14F2F2F3"/>
+                                    <Border Width="10" Height="10" Margin="1" CornerRadius="2" Background="#44F2F2F3"/>
+                                    <Border Width="10" Height="10" Margin="1" CornerRadius="2" Background="#78F2F2F3"/>
+                                    <Border Width="10" Height="10" Margin="1" CornerRadius="2" Background="#B4F2F2F3"/>
+                                    <Border Width="10" Height="10" Margin="1" CornerRadius="2" Background="#F2F2F2F3"/>
+                                    <TextBlock Text="More" FontSize="10" Foreground="{StaticResource TextMuted}" Margin="5,0,0,0" VerticalAlignment="Center"/>
+                                </StackPanel>
+                                <ToggleButton DockPanel.Dock="Right" Content="Only me" IsChecked="{Binding Activity.MineOnly, Mode=TwoWay}" Padding="10,2" MinHeight="0" FontSize="12" Margin="0,0,8,0"
+                                              ToolTip="Show only your own commits" Visibility="{Binding ShowActivity, Converter={StaticResource BoolToVis}}"/>
+                                <TextBlock Text="ACTIVITY" Style="{StaticResource SectionLabel}" VerticalAlignment="Center"/>
+                                <TextBlock Text="{Binding Activity.Summary}" Margin="12,0,0,0" FontSize="12" Foreground="{StaticResource TextMuted}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                            </DockPanel>
+                            <StackPanel Margin="0,8,0,0" Visibility="{Binding ShowActivity, Converter={StaticResource BoolToVis}}">
+                                <TextBlock Text="{Binding Activity.Error}" Foreground="{StaticResource Danger}" FontSize="12" TextWrapping="Wrap"
+                                           Visibility="{Binding Activity.Error, Converter={StaticResource HasValueToVis}}"/>
+                                <Viewbox HorizontalAlignment="Left" StretchDirection="DownOnly" Stretch="Uniform"
+                                         Visibility="{Binding Activity.IsLoaded, Converter={StaticResource BoolToVis}}">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="14"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+                                        <!-- Месяцы -->
+                                        <ItemsControl Grid.Column="1" ItemsSource="{Binding Activity.MonthLabels}" Width="636" Height="14">
+                                            <ItemsControl.ItemsPanel><ItemsPanelTemplate><Canvas/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemContainerStyle>
+                                                <Style TargetType="ContentPresenter">
+                                                    <Setter Property="Canvas.Left" Value="{Binding X}"/>
+                                                </Style>
+                                            </ItemsControl.ItemContainerStyle>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate><TextBlock Text="{Binding Text}" FontSize="10" Foreground="{StaticResource TextMuted}" TextWrapping="NoWrap"/></DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                        <!-- Дни недели -->
+                                        <ItemsControl Grid.Row="1" ItemsSource="{Binding Activity.RowLabels}" Margin="0,0,8,0">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate><TextBlock Text="{Binding}" Height="12" FontSize="10" Foreground="{StaticResource TextMuted}" VerticalAlignment="Center"/></DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                        <!-- Клетки: 7 строк по 53 недели -->
+                                        <ItemsControl Grid.Row="1" Grid.Column="1" ItemsSource="{Binding Activity.Cells}" Width="636" Height="84">
+                                            <ItemsControl.ItemsPanel><ItemsPanelTemplate><UniformGrid Rows="7" Columns="53"/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Width="10" Height="10" Margin="1" CornerRadius="2" Background="{Binding Brush}" ToolTip="{Binding Tooltip}">
+                                                        <Border.Style>
+                                                            <Style TargetType="Border">
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding IsVisible}" Value="False"><Setter Property="Opacity" Value="0"/></DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </Border.Style>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </Grid>
+                                </Viewbox>
+                                <TextBlock Text="Loading…" FontSize="12" Foreground="{StaticResource TextMuted}"
+                                           Visibility="{Binding Activity.IsBusy, Converter={StaticResource BoolToVis}}"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
 
                 <!-- Вкладки -->
                 <Border Grid.Row="4" Style="{StaticResource Card}" Margin="0,22,0,0" Padding="18,4,18,12">
@@ -386,6 +477,18 @@
                                 </StackPanel>
                             </TabItem.Header>
                             <DockPanel Margin="0,12,0,0">
+                                <!-- Конфликты после sync: submit невозможен, пока файлы не решены -->
+                                <Border DockPanel.Dock="Top" Margin="0,0,0,10" Padding="14,8,8,8" CornerRadius="10" Background="#14F2555A" BorderBrush="#59F2555A" BorderThickness="1"
+                                        Visibility="{Binding HasUnresolved, Converter={StaticResource BoolToVis}}">
+                                    <DockPanel>
+                                        <Button DockPanel.Dock="Right" Content="Resolve…" Command="{Binding ResolveCommand}" Style="{StaticResource PrimaryButton}" Padding="14,5"/>
+                                        <TextBlock DockPanel.Dock="Left" Text="&#xE7BA;" Style="{StaticResource Glyph}" FontSize="14" Foreground="{StaticResource Danger}" Margin="0,0,12,0"/>
+                                        <TextBlock VerticalAlignment="Center" TextWrapping="Wrap" Foreground="{StaticResource TextSecondary}">
+                                            <Run Text="{Binding UnresolvedText, Mode=OneWay}" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}"/>
+                                            <Run Text=": a teammate submitted a newer version while you had them open. Submit is blocked until you resolve."/>
+                                        </TextBlock>
+                                    </DockPanel>
+                                </Border>
                                 <WrapPanel DockPanel.Dock="Top">
                                     <WrapPanel.Resources>
                                         <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
@@ -519,6 +622,9 @@
                                                         <Setter Property="FontWeight" Value="Bold"/>
                                                         <Setter Property="ToolTip" Value="{Binding MarkerTip}"/>
                                                         <Setter Property="HorizontalAlignment" Value="Center"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding NeedsResolve}" Value="True"><Setter Property="Foreground" Value="{StaticResource Danger}"/></DataTrigger>
+                                                        </Style.Triggers>
                                                     </Style>
                                                 </DataGridTextColumn.ElementStyle>
                                             </DataGridTextColumn>

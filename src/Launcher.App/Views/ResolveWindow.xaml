@@ -1,0 +1,96 @@
+<Window x:Class="PerforceLauncher.App.Views.ResolveWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Resolve Conflicts" Icon="/PerforceLauncher;component/Assets/app.ico" Style="{StaticResource AppWindow}"
+        Width="860" Height="600" MinWidth="700" MinHeight="400" WindowStartupLocation="CenterOwner">
+    <DockPanel Margin="20,16,20,16">
+        <!-- Низ: массовые действия и закрытие -->
+        <DockPanel DockPanel.Dock="Bottom" Margin="0,14,0,0">
+            <Button DockPanel.Dock="Right" Content="Close" IsCancel="True" IsDefault="True" Style="{StaticResource PrimaryButton}" Padding="18,6"/>
+            <StackPanel Orientation="Horizontal">
+                <Button Content="Auto-merge All" Command="{Binding AutoMergeAllCommand}" Margin="0,0,8,0"
+                        ToolTip="Merge every text file automatically. Only files where you and your teammates changed different lines are resolved."/>
+                <Button Content="Take Theirs for All" Command="{Binding TakeTheirsAllCommand}" Margin="0,0,8,0"
+                        ToolTip="Replace your version of every open file with the server version (your copies are backed up)"/>
+                <Button Content="Keep Mine for All" Command="{Binding KeepMineAllCommand}"
+                        ToolTip="Keep your version of every open file"/>
+            </StackPanel>
+        </DockPanel>
+
+        <!-- Верх: что происходит -->
+        <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
+            <TextBlock Text="{Binding Status}" FontSize="18" FontWeight="SemiBold" FontFamily="{StaticResource DisplayFont}"/>
+            <TextBlock Margin="0,6,0,0" TextWrapping="Wrap" Foreground="{StaticResource TextSecondary}"
+                       Text="While you had these files open, somebody submitted a newer version. Choose what to keep for each file. Submit stays blocked until every file is resolved."/>
+            <TextBlock Margin="0,6,0,0" TextWrapping="Wrap" Foreground="{StaticResource Warn}" FontSize="12"
+                       Text="Binary files (.uasset, .umap) can't be merged line by line: pick your version or theirs."
+                       Visibility="{Binding HasBinary, Converter={StaticResource BoolToVis}}"/>
+            <TextBlock Margin="0,4,0,0" TextWrapping="Wrap" Foreground="{StaticResource TextMuted}" FontSize="12"
+                       Text="{Binding MergeToolHint}" Visibility="{Binding MergeToolHint, Converter={StaticResource HasValueToVis}}"/>
+            <TextBlock Margin="0,6,0,0" TextWrapping="Wrap" Foreground="{StaticResource Danger}"
+                       Text="{Binding Error}" Visibility="{Binding Error, Converter={StaticResource HasValueToVis}}"/>
+        </StackPanel>
+
+        <Grid>
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <ItemsControl ItemsSource="{Binding Items}" Margin="0,0,8,0">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Margin="0,0,0,8" Padding="14,12" CornerRadius="10" Background="#0AFFFFFF" BorderBrush="{StaticResource CardBorder}" BorderThickness="1">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="14"/>
+                                            <Border Style="{StaticResource CountBadge}">
+                                                <TextBlock Text="{Binding KindText}" FontSize="11"/>
+                                            </Border>
+                                        </StackPanel>
+                                        <TextBlock Text="{Binding Folder}" FontSize="11.5" Foreground="{StaticResource TextMuted}" TextTrimming="CharacterEllipsis"/>
+                                        <TextBlock Text="{Binding TheirsInfo}" Margin="0,8,0,0" FontSize="12.5" Foreground="{StaticResource TextSecondary}" TextWrapping="Wrap"/>
+                                        <TextBlock Text="{Binding YoursInfo}" FontSize="12" Foreground="{StaticResource TextMuted}"/>
+                                        <!-- Итог по файлу -->
+                                        <TextBlock Margin="0,8,0,0" FontSize="12.5" TextWrapping="Wrap" Text="{Binding Message}">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Foreground" Value="{StaticResource TextSecondary}"/>
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsDone}" Value="True"><Setter Property="Foreground" Value="{StaticResource Ok}"/></DataTrigger>
+                                                        <DataTrigger Binding="{Binding IsFailed}" Value="True"><Setter Property="Foreground" Value="{StaticResource Warn}"/></DataTrigger>
+                                                        <DataTrigger Binding="{Binding Message}" Value=""><Setter Property="Visibility" Value="Collapsed"/></DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </StackPanel>
+                                    <!-- Что сделать с файлом -->
+                                    <StackPanel Grid.Column="1" Margin="16,0,0,0" VerticalAlignment="Center" MinWidth="150"
+                                                Visibility="{Binding CanChoose, Converter={StaticResource BoolToVis}}">
+                                        <Button Content="Auto-merge" Command="{Binding AutoMergeCommand}" HorizontalAlignment="Stretch" Margin="0,0,0,6"
+                                                Visibility="{Binding IsText, Converter={StaticResource BoolToVis}}"
+                                                ToolTip="Merge both sets of changes if they don't touch the same lines"/>
+                                        <Button Content="Merge in P4Merge…" Command="{Binding MergeCommand}" HorizontalAlignment="Stretch" Margin="0,0,0,6"
+                                                Visibility="{Binding IsText, Converter={StaticResource BoolToVis}}"
+                                                ToolTip="Open base, theirs and yours side by side and merge by hand"/>
+                                        <Button Content="Keep Mine" Command="{Binding KeepMineCommand}" HorizontalAlignment="Stretch" Margin="0,0,0,6"
+                                                ToolTip="Keep your version; it will replace theirs when you submit"/>
+                                        <Button Content="Take Theirs" Command="{Binding TakeTheirsCommand}" HorizontalAlignment="Stretch"
+                                                ToolTip="Replace your version with the server version (a backup copy is saved)"/>
+                                    </StackPanel>
+                                    <TextBlock Grid.Column="1" Text="Resolved" Foreground="{StaticResource Ok}" FontWeight="SemiBold" VerticalAlignment="Center" Margin="16,0,0,0"
+                                               Visibility="{Binding IsDone, Converter={StaticResource BoolToVis}}"/>
+                                    <TextBlock Grid.Column="1" Text="Working…" Foreground="{StaticResource TextMuted}" VerticalAlignment="Center" Margin="16,0,0,0"
+                                               Visibility="{Binding IsWorking, Converter={StaticResource BoolToVis}}"/>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Grid>
+    </DockPanel>
+</Window>

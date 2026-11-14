@@ -35,6 +35,7 @@ powershell -File build-exe.ps1      # -> dist\PerforceLauncher.exe (не обн�
 ## Возможности
 - **Проекты** (сайдбар): статус каждого, бейдж с числом новых коммитов.
 - **Статус**: Up to date / N new commits / Sign in required; сводка Synced · On server · Local changes.
+  Под статусом карта активности: сабмиты по дням за год, как на GitHub, для всей команды или только ваши (переключатель Only me). Её можно свернуть кнопкой справа.
 - **Launch Unreal** (Ctrl+Enter) с версией движка, **Open in Rider / Visual Studio**, **Generate Project Files**, свои команды.
 - **Get Latest** с отменой; после синка — подсказка перегенерировать project files, если изменились `.Build.cs`/`.Target.cs`/`.uproject`/`.uplugin`.
   Если Perforce не перезаписал файлы, доступные на запись без checkout («Can't clobber writable file»), лаунчер показывает их список
@@ -44,6 +45,7 @@ powershell -File build-exe.ps1      # -> dist\PerforceLauncher.exe (не обн�
   Blueprint-only проекты не затрагиваются.
 - **Incoming / Pending / History**: submit, reconcile, changelist'ы, revert; предупреждение ⚠ для файлов из `.p4ignore`, уже лежащих в депо;
   история с поиском, файлами коммита и «Sync Workspace to This Changelist…».
+  Если файл изменили и вы, и коллега (после Get Latest), в Pending он помечается значком ⇄, а сверху появляется кнопка Resolve. В окне Resolve для каждого файла можно оставить свою версию, взять чужую, слить автоматически или вручную в P4Merge (только для текстовых файлов; бинарные .uasset и .umap сливать построчно нельзя). Перед заменой вашего файла копия сохраняется в Backups. Пока файлы не решены, Submit не отправляется, а предлагает сначала решить конфликты.
   В окне описания changelist'а есть кнопка «Translate to English»: она переводит русский текст через Google Translate
   (если он недоступен, через MyMemory), а «Restore Original» или Ctrl+Z возвращают исходный текст.
   При Submit русское описание переводится автоматически, поэтому в депо коммит всегда уходит с английским текстом;

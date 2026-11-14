@@ -37,6 +37,8 @@ public sealed class ProjectProfile
 
     public int PollIntervalSeconds { get; set; } = 120;
     public bool NotificationsEnabled { get; set; } = true;
+    /// <summary>Файлы с чужим checkout, о которых просили сообщить, когда освободятся (depot-пути).</summary>
+    public List<string> WatchedFiles { get; set; } = new();
 
     public List<CustomActionDef> CustomActions { get; set; } = new();
 
@@ -56,6 +58,12 @@ public sealed class WindowPlacement
     public bool Maximized { get; set; }
 }
 
+public sealed class DescriptionTemplate
+{
+    public string Name { get; set; } = "";
+    public string Text { get; set; } = "";
+}
+
 public sealed class AppSettings
 {
     public string P4Path { get; set; } = "p4";
@@ -69,6 +77,10 @@ public sealed class AppSettings
     public bool RemindOnWake { get; set; } = true;
     /// <summary>Показывать карту активности (сабмиты по дням) на главном экране проекта.</summary>
     public bool ShowActivity { get; set; } = true;
+    /// <summary>Последние описания коммитов (для подстановки в окне описания).</summary>
+    public List<string> RecentDescriptions { get; set; } = new();
+    /// <summary>Шаблоны описаний, сохранённые пользователем.</summary>
+    public List<DescriptionTemplate> DescriptionTemplates { get; set; } = new();
     /// <summary>Положение и размер главного окна между запусками.</summary>
     public WindowPlacement? Window { get; set; }
     public Guid? SelectedProfileId { get; set; }
@@ -103,7 +115,7 @@ public sealed record VcsStatus(
 
 /// <summary>Файл, открытый в воркспейсе (p4 opened). Change == 0 — default changelist.</summary>
 /// <remarks>IgnoredBy != null: файл подпадает под P4IGNORE, но уже находится в депо (формат «файл:строка:правило»).</remarks>
-public sealed record OpenedFile(string DepotPath, string LocalPath, string Action, long Change, string Type, int Rev, string? IgnoredBy = null, bool NeedsResolve = false)
+public sealed record OpenedFile(string DepotPath, string LocalPath, string Action, long Change, string Type, int Rev, string? IgnoredBy = null, bool NeedsResolve = false, bool IsLocked = false)
 {
     public bool IsIgnored => IgnoredBy != null;
 }
@@ -129,6 +141,30 @@ public sealed record UnresolvedFile(
 
 /// <summary>Результат p4 resolve по одному файлу: строки вывода и осталось ли нерешённое.</summary>
 public sealed record ResolveOutcome(string DepotPath, bool Resolved, string Message);
+
+/// <summary>Ревизия файла из p4 filelog.</summary>
+public sealed record FileRevision(int Rev, long Change, string Action, string User, string Client, DateTime Time, string Description, string Type, long Size)
+{
+    public string FirstLine
+    {
+        get { var d = Description.Trim(); var i = d.IndexOfAny(new[] { '\r', '\n' }); return i < 0 ? d : d[..i]; }
+    }
+}
+
+/// <summary>Отложенный (shelved) changelist.</summary>
+public sealed record ShelvedChange(long Id, string User, string Client, DateTime Time, string Description)
+{
+    public string FirstLine
+    {
+        get { var d = Description.Trim(); var i = d.IndexOfAny(new[] { '\r', '\n' }); return i < 0 ? d : d[..i]; }
+    }
+}
+
+/// <summary>Файл внутри shelve.</summary>
+public sealed record ShelvedFile(string DepotPath, string Action, int Rev);
+
+/// <summary>Метка (label) в депо.</summary>
+public sealed record LabelInfo(string Name, string Owner, DateTime Updated, string Description);
 
 /// <summary>Один сабмит для карты активности.</summary>
 public sealed record CommitActivity(DateTime Time, string User);

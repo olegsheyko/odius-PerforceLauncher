@@ -323,6 +323,59 @@ public sealed class DialogService : IDialogService
         };
         UpdateTranslateButton();
 
+        // Шаблоны и недавние описания: меню «Templates» подставляет выбранный текст в поле.
+        if (DescriptionBook is { } book)
+        {
+            var templates = new Button
+            {
+                Padding = new Thickness(12, 6, 14, 6), Margin = new Thickness(8, 0, 0, 0),
+                ToolTip = "Insert a recent description or a saved template",
+                Content = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Children = { new TextBlock { Text = "\uE8A5", Style = (Style)Application.Current.FindResource("Glyph"), Margin = new Thickness(0, 0, 8, 0) }, new TextBlock { Text = "Templates", VerticalAlignment = VerticalAlignment.Center } },
+                },
+            };
+            DockPanel.SetDock(templates, Dock.Left);
+            bar.Children.Insert(1, templates);
+
+            void Insert(string text)
+            {
+                original = translated = null;   // подставленный текст — новый исходник, «Restore Original» к нему не относится
+                Replace(text);
+                UpdateTranslateButton();
+                box.Focus();
+            }
+            string Short(string t) { var first = t.Split('\n')[0].Trim(); return (first.Length > 64 ? first[..64] + "…" : first).Replace("_", "__"); }
+
+            templates.Click += (_, _) =>
+            {
+                var menu = new ContextMenu { PlacementTarget = templates, Placement = System.Windows.Controls.Primitives.PlacementMode.Top };
+                menu.Items.Add(new MenuItem { Header = "Recent", IsEnabled = false });
+                if (book.Recent.Count == 0) menu.Items.Add(new MenuItem { Header = "(none yet)", IsEnabled = false });
+                foreach (var r in book.Recent.Take(8)) { var text = r; var mi = new MenuItem { Header = Short(text), ToolTip = text }; mi.Click += (_, _) => Insert(text); menu.Items.Add(mi); }
+                menu.Items.Add(new Separator());
+                menu.Items.Add(new MenuItem { Header = "Templates", IsEnabled = false });
+                if (book.Templates.Count == 0) menu.Items.Add(new MenuItem { Header = "(no templates)", IsEnabled = false });
+                foreach (var t in book.Templates.ToList()) { var tpl = t; var mi = new MenuItem { Header = tpl.Name.Replace("_", "__"), ToolTip = tpl.Text }; mi.Click += (_, _) => Insert(tpl.Text); menu.Items.Add(mi); }
+                menu.Items.Add(new Separator());
+                var save = new MenuItem { Header = "Save Current Text as Template…", IsEnabled = box.Text.Trim().Length > 0 };
+                save.Click += (_, _) =>
+                {
+                    var name = PromptText("Save template", "Template name:", Short(box.Text), "Save");
+                    if (!string.IsNullOrWhiteSpace(name)) book.SaveTemplate(name.Trim(), box.Text);
+                };
+                menu.Items.Add(save);
+                if (book.Templates.Count > 0)
+                {
+                    var del = new MenuItem { Header = "Delete Template" };
+                    foreach (var t in book.Templates.ToList()) { var n = t.Name; var mi = new MenuItem { Header = n.Replace("_", "__") }; mi.Click += (_, _) => book.DeleteTemplate(n); del.Items.Add(mi); }
+                    menu.Items.Add(del);
+                }
+                menu.IsOpen = true;
+            };
+        }
+
         ok.Click += async (_, _) =>
         {
             if (!requireEnglish || !Translator.HasCyrillic(box.Text)) { win.DialogResult = true; return; }
@@ -389,6 +442,27 @@ public sealed class DialogService : IDialogService
             ok.Style = (Style)Application.Current.FindResource("PrimaryButton");
         w.Icon = new System.Windows.Media.Imaging.BitmapImage(new System.Uri("pack://application:,,,/PerforceLauncher;component/Assets/app.ico"));
         return w;
+    }
+
+    public PerforceLauncher.App.Infrastructure.DescriptionBook? DescriptionBook { get; set; }
+
+    /// <summary>Окно инструмента по типу его view model; без видимого главного окна (трей) центрируется на экране.</summary>
+    public void ShowDialog(object viewModel)
+    {
+        Window win = viewModel switch
+        {
+            FileHistoryViewModel v => new FileHistoryWindow(v),
+            ShelvesViewModel v => new ShelvesWindow(v),
+            LabelsViewModel v => new LabelsWindow(v),
+            CleanupViewModel v => new CleanupWindow(v),
+            BuildIssuesViewModel v => new BuildIssuesWindow(v),
+            _ => throw new ArgumentException("Unknown tool window: " + viewModel.GetType().Name),
+        };
+        if (Owner is { IsVisible: true } owner) win.Owner = owner;
+        else win.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        // Окно очистки считает размеры в фоне после показа.
+        if (viewModel is CleanupViewModel cleanup) win.Loaded += async (_, _) => await cleanup.ScanAsync();
+        win.ShowDialog();
     }
 
     public void ShowResolve(ResolveViewModel vm)

@@ -146,6 +146,7 @@ public partial class MainWindow : Window
         }
         if (header.CanSubmit) Add("Submit…", _vm.SubmitChangelistCommand);
         if (!header.IsDefault) Add("Edit Description…", _vm.EditChangelistCommand);
+        if (header.FileCount > 0) Add("Shelve Files…", _vm.ShelveChangelistCommand);
         if (header.FileCount > 0) Add("Revert All Files…", _vm.RevertChangelistCommand);
         if (!header.IsDefault)
         {

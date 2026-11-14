@@ -10,13 +10,25 @@ namespace PerforceLauncher.App.ViewModels;
 /// <summary>Строка вкладки «Checked Out»: один открытый файл.</summary>
 public sealed class CheckoutFileViewModel
 {
-    public CheckoutFileViewModel(CheckedOutFile file, string folder, Action<string?> copy)
+    public CheckoutFileViewModel(CheckedOutFile file, string folder, Action<string?> copy, Action<string> history, Action<string> watch, bool isMine, bool isWatched)
     {
         File = file;
         Folder = folder;
+        IsMine = isMine;
+        IsWatched = isWatched;
         CopyPathCommand = new RelayCommand(_ => copy(file.DepotPath));
         CopyNameCommand = new RelayCommand(_ => copy(file.FileName));
+        HistoryCommand = new RelayCommand(_ => history(file.DepotPath));
+        WatchCommand = new RelayCommand(_ => watch(file.DepotPath));
     }
+
+    public bool IsMine { get; }
+    public bool IsWatched { get; }
+    /// <summary>Слежение имеет смысл только за чужими файлами.</summary>
+    public bool CanWatch => !IsMine;
+    public string WatchText => IsWatched ? "Stop Notifying When Free" : "Notify Me When Free";
+    public System.Windows.Input.ICommand HistoryCommand { get; }
+    public System.Windows.Input.ICommand WatchCommand { get; }
 
     public System.Windows.Input.ICommand CopyPathCommand { get; }
     public System.Windows.Input.ICommand CopyNameCommand { get; }

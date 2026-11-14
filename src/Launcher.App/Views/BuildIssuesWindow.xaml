@@ -1,0 +1,46 @@
+<Window x:Class="PerforceLauncher.App.Views.BuildIssuesWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Build Errors" Icon="/PerforceLauncher;component/Assets/app.ico" Style="{StaticResource AppWindow}"
+        Width="1000" Height="560" MinWidth="720" MinHeight="380" WindowStartupLocation="CenterOwner">
+    <DockPanel Margin="20,16,20,16">
+        <DockPanel DockPanel.Dock="Bottom" Margin="0,12,0,0">
+            <Button DockPanel.Dock="Right" Content="Close" IsCancel="True" IsDefault="True" Style="{StaticResource PrimaryButton}" Padding="18,6"/>
+            <StackPanel Orientation="Horizontal">
+                <Button Content="Open in IDE" Command="{Binding SelectedItem.OpenCommand, ElementName=Grid}" Margin="0,0,8,0"
+                        ToolTip="Open the file at the failing line (double-click a row does the same)"/>
+                <Button Content="Copy All" Command="{Binding CopyAllCommand}" Margin="0,0,8,0"/>
+                <ToggleButton Content="Show warnings" IsChecked="{Binding ShowWarnings, Mode=TwoWay}"/>
+            </StackPanel>
+        </DockPanel>
+
+        <StackPanel DockPanel.Dock="Top" Margin="0,0,0,10">
+            <TextBlock Text="{Binding Title}" FontSize="18" FontWeight="SemiBold" FontFamily="{StaticResource DisplayFont}"/>
+            <TextBlock Text="{Binding Summary}" Foreground="{StaticResource TextSecondary}" Margin="0,4,0,0"/>
+        </StackPanel>
+
+        <DataGrid x:Name="Grid" ItemsSource="{Binding Items}" SelectionMode="Single" Style="{StaticResource FlatGrid}" MouseDoubleClick="Grid_MouseDoubleClick">
+            <DataGrid.ContextMenu>
+                <ContextMenu>
+                    <MenuItem Header="Open in IDE" Command="{Binding PlacementTarget.SelectedItem.OpenCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                </ContextMenu>
+            </DataGrid.ContextMenu>
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="" Binding="{Binding SeverityText}" Width="72">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Foreground" Value="{StaticResource Warn}"/>
+                            <Setter Property="FontWeight" Value="SemiBold"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsError}" Value="True"><Setter Property="Foreground" Value="{StaticResource Danger}"/></DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+                <DataGridTextColumn Header="LOCATION" Binding="{Binding Location}" Width="220"/>
+                <DataGridTextColumn Header="CODE" Binding="{Binding Code}" Width="80"/>
+                <DataGridTextColumn Header="MESSAGE" Binding="{Binding Message}" Width="*"/>
+            </DataGrid.Columns>
+        </DataGrid>
+    </DockPanel>
+</Window>

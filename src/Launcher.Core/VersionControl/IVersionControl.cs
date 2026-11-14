@@ -64,6 +64,22 @@ public interface IVersionControl
     /// <summary>Сохранить содержимое ревизии (p4 print) в файл: для P4Merge (база и «их» версия).</summary>
     Task PrintRevisionAsync(ProjectProfile profile, string depotPath, int rev, string outputFile, CancellationToken ct = default);
 
+    // ---------- история файла, shelve, блокировки, метки ----------
+
+    Task<IReadOnlyList<FileRevision>> GetFileHistoryAsync(ProjectProfile profile, string depotPath, int limit, CancellationToken ct = default);
+    /// <summary>p4 shelve -f -c N: отложить файлы changelist'а (локальные файлы остаются).</summary>
+    Task ShelveAsync(ProjectProfile profile, long changeId, IProgress<string>? progress, CancellationToken ct = default);
+    Task DeleteShelfAsync(ProjectProfile profile, long changeId, CancellationToken ct = default);
+    /// <summary>Отложенные changelist'ы в области проекта (все пользователи).</summary>
+    Task<IReadOnlyList<ShelvedChange>> GetShelvesAsync(ProjectProfile profile, CancellationToken ct = default);
+    Task<IReadOnlyList<ShelvedFile>> GetShelvedFilesAsync(ProjectProfile profile, long changeId, CancellationToken ct = default);
+    /// <summary>p4 unshelve -s N [-f] -c target (0 = default).</summary>
+    Task UnshelveAsync(ProjectProfile profile, long shelvedChange, long targetChange, bool force, IProgress<string>? progress, CancellationToken ct = default);
+    Task LockAsync(ProjectProfile profile, IReadOnlyList<string> depotPaths, CancellationToken ct = default);
+    Task UnlockAsync(ProjectProfile profile, IReadOnlyList<string> depotPaths, CancellationToken ct = default);
+    Task<IReadOnlyList<LabelInfo>> GetLabelsAsync(ProjectProfile profile, int limit, CancellationToken ct = default);
+    Task<SyncResult> SyncToLabelAsync(ProjectProfile profile, string label, IProgress<string>? progress, CancellationToken ct = default);
+
     // ---------- активность ----------
 
     /// <summary>Сабмиты в области проекта с указанной даты (для карты активности).</summary>

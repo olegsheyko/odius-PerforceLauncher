@@ -310,6 +310,84 @@ public sealed class P4VersionControl : IVersionControl
         await RunUntaggedAsync(profile, null, ct, "print", "-q", "-o", outputFile, $"{EscapePath(depotPath)}#{rev}");
     }
 
+    // ---------- история файла, shelve, блокировки, метки ----------
+
+    public async Task<IReadOnlyList<FileRevision>> GetFileHistoryAsync(ProjectProfile profile, string depotPath, int limit, CancellationToken ct = default)
+    {
+        var row = (await RunTaggedAsync(profile, ct, "filelog", "-l", "-m", Math.Clamp(limit, 1, 500).ToString(), EscapePath(depotPath))).FirstOrDefault();
+        var result = new List<FileRevision>();
+        if (row == null) return result;
+        // filelog отдаёт одну запись с индексированными полями: rev0, change0, action0, time0, user0...
+        for (var i = 0; row.ContainsKey($"rev{i}"); i++)
+        {
+            int.TryParse(Str(row, $"rev{i}"), out var rev);
+            long.TryParse(Str(row, $"change{i}"), out var change);
+            long.TryParse(Str(row, $"time{i}"), out var t);
+            long.TryParse(Str(row, $"fileSize{i}"), out var size);
+            result.Add(new FileRevision(rev, change, Str(row, $"action{i}"), Str(row, $"user{i}"), Str(row, $"client{i}"),
+                DateTimeOffset.FromUnixTimeSeconds(t).LocalDateTime, Str(row, $"desc{i}"), Str(row, $"type{i}"), size));
+        }
+        return result;
+    }
+
+    public async Task ShelveAsync(ProjectProfile profile, long changeId, IProgress<string>? progress, CancellationToken ct = default)
+    {
+        foreach (var l in await RunUntaggedAsync(profile, null, ct, "shelve", "-f", "-c", changeId.ToString())) progress?.Report(l);
+    }
+
+    public Task DeleteShelfAsync(ProjectProfile profile, long changeId, CancellationToken ct = default) =>
+        RunUntaggedAsync(profile, null, ct, "shelve", "-d", "-c", changeId.ToString());
+
+    public async Task<IReadOnlyList<ShelvedChange>> GetShelvesAsync(ProjectProfile profile, CancellationToken ct = default)
+    {
+        var changes = await QueryChangesAsync(profile, ct, "-l", "-s", "shelved", "-m", "200", Scope(profile));
+        return changes.Select(c => new ShelvedChange(c.Id, c.User, c.Client, c.Time, c.Description)).ToList();
+    }
+
+    public async Task<IReadOnlyList<ShelvedFile>> GetShelvedFilesAsync(ProjectProfile profile, long changeId, CancellationToken ct = default)
+    {
+        var row = (await RunTaggedAsync(profile, ct, "describe", "-S", "-s", changeId.ToString())).FirstOrDefault();
+        var result = new List<ShelvedFile>();
+        if (row == null) return result;
+        for (var i = 0; row.ContainsKey($"depotFile{i}"); i++)
+        {
+            int.TryParse(Str(row, $"rev{i}"), out var rev);
+            result.Add(new ShelvedFile(Str(row, $"depotFile{i}"), Str(row, $"action{i}"), rev));
+        }
+        return result;
+    }
+
+    public async Task UnshelveAsync(ProjectProfile profile, long shelvedChange, long targetChange, bool force, IProgress<string>? progress, CancellationToken ct = default)
+    {
+        var args = new List<string> { "unshelve", "-s", shelvedChange.ToString() };
+        if (force) args.Add("-f");
+        if (targetChange != 0) { args.Add("-c"); args.Add(targetChange.ToString()); }
+        foreach (var l in await RunUntaggedAsync(profile, null, ct, args.ToArray())) progress?.Report(l);
+    }
+
+    public async Task LockAsync(ProjectProfile profile, IReadOnlyList<string> depotPaths, CancellationToken ct = default)
+    {
+        foreach (var chunk in depotPaths.Chunk(50)) await RunUntaggedAsync(profile, null, ct, new[] { "lock" }.Concat(chunk.Select(EscapePath)).ToArray());
+    }
+
+    public async Task UnlockAsync(ProjectProfile profile, IReadOnlyList<string> depotPaths, CancellationToken ct = default)
+    {
+        foreach (var chunk in depotPaths.Chunk(50)) await RunUntaggedAsync(profile, null, ct, new[] { "unlock" }.Concat(chunk.Select(EscapePath)).ToArray());
+    }
+
+    public async Task<IReadOnlyList<LabelInfo>> GetLabelsAsync(ProjectProfile profile, int limit, CancellationToken ct = default)
+    {
+        var rows = await RunTaggedAsync(profile, ct, "labels", "-m", "1000");
+        return rows.Select(r =>
+        {
+            long.TryParse(Str(r, "Update"), out var t);
+            return new LabelInfo(Str(r, "label"), Str(r, "Owner"), DateTimeOffset.FromUnixTimeSeconds(t).LocalDateTime, Str(r, "Description").Trim());
+        }).Where(l => l.Name.Length > 0).OrderByDescending(l => l.Updated).Take(Math.Clamp(limit, 1, 1000)).ToList();
+    }
+
+    public Task<SyncResult> SyncToLabelAsync(ProjectProfile profile, string label, IProgress<string>? progress, CancellationToken ct = default) =>
+        SyncTargetAsync(profile, new[] { $"{Scope(profile)}@{label}" }, progress, ct);
+
     // ---------- активность ----------
 
     public async Task<IReadOnlyList<CommitActivity>> GetActivityAsync(ProjectProfile profile, DateTime since, CancellationToken ct = default)
@@ -329,7 +407,7 @@ public sealed class P4VersionControl : IVersionControl
                 int.TryParse(Str(o, "rev"), out var rev);
                 var depot = Str(o, "depotFile");
                 return new OpenedFile(depot, ToLocalPath(profile, Str(o, "clientFile"), depot),
-                    Str(o, "action"), ch, Str(o, "type"), rev);
+                    Str(o, "action"), ch, Str(o, "type"), rev, null, false, o.ContainsKey("ourLock"));
             })
             .ToList();
 

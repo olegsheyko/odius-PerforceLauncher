@@ -1,0 +1,52 @@
+<Window x:Class="PerforceLauncher.App.Views.FileHistoryWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="File History" Icon="/PerforceLauncher;component/Assets/app.ico" Style="{StaticResource AppWindow}"
+        Width="960" Height="600" MinWidth="720" MinHeight="420" WindowStartupLocation="CenterOwner">
+    <DockPanel Margin="20,16,20,16">
+        <DockPanel DockPanel.Dock="Bottom" Margin="0,12,0,0">
+            <Button DockPanel.Dock="Right" Content="Close" IsCancel="True" IsDefault="True" Style="{StaticResource PrimaryButton}" Padding="18,6"/>
+            <StackPanel Orientation="Horizontal">
+                <Button Content="Compare With Previous" Command="{Binding SelectedItem.DiffPreviousCommand}" Margin="0,0,8,0"
+                        ToolTip="Open this revision and the one before it side by side in P4Merge"/>
+                <Button Content="Compare With My File" Command="{Binding SelectedItem.DiffLocalCommand}"
+                        ToolTip="Compare this revision with the file in your workspace"/>
+            </StackPanel>
+        </DockPanel>
+
+        <StackPanel DockPanel.Dock="Top" Margin="0,0,0,10">
+            <TextBlock Text="{Binding FileName}" FontSize="18" FontWeight="SemiBold" FontFamily="{StaticResource DisplayFont}"/>
+            <TextBlock Text="{Binding DepotPath}" FontSize="12" Foreground="{StaticResource TextMuted}" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
+            <TextBlock Text="{Binding BinaryHint}" Foreground="{StaticResource Warn}" FontSize="12" Margin="0,6,0,0"
+                       Visibility="{Binding BinaryHint, Converter={StaticResource HasValueToVis}}"/>
+            <TextBlock Text="{Binding Error}" Foreground="{StaticResource Danger}" TextWrapping="Wrap" Margin="0,6,0,0"
+                       Visibility="{Binding Error, Converter={StaticResource HasValueToVis}}"/>
+        </StackPanel>
+
+        <Border DockPanel.Dock="Bottom" Height="96" Margin="0,10,0,0" Background="#0AFFFFFF" CornerRadius="8" Padding="2">
+            <TextBox Text="{Binding SelectedItem.Description, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
+                     Background="Transparent" BorderThickness="0" VerticalContentAlignment="Top"/>
+        </Border>
+
+        <DataGrid ItemsSource="{Binding Items}" SelectedItem="{Binding SelectedItem, Mode=TwoWay}" SelectionMode="Single" Style="{StaticResource FlatGrid}">
+            <DataGrid.ContextMenu>
+                <ContextMenu>
+                    <MenuItem Header="Compare With Previous" Command="{Binding PlacementTarget.SelectedItem.DiffPreviousCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                    <MenuItem Header="Compare With My File" Command="{Binding PlacementTarget.SelectedItem.DiffLocalCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                    <Separator/>
+                    <MenuItem Header="Copy CL Number" Command="{Binding PlacementTarget.SelectedItem.CopyChangeCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                    <MenuItem Header="Copy Description" Command="{Binding PlacementTarget.SelectedItem.CopyDescriptionCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                </ContextMenu>
+            </DataGrid.ContextMenu>
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="REV" Binding="{Binding Rev}" Width="56"/>
+                <DataGridTextColumn Header="CL" Binding="{Binding Change}" Width="84"/>
+                <DataGridTextColumn Header="ACTION" Binding="{Binding Action}" Width="84"/>
+                <DataGridTextColumn Header="AUTHOR" Binding="{Binding User}" Width="110"/>
+                <DataGridTextColumn Header="DATE" Binding="{Binding Time, StringFormat=dd.MM.yyyy HH:mm}" Width="130"/>
+                <DataGridTextColumn Header="DESCRIPTION" Binding="{Binding FirstLine}" Width="*"/>
+                <DataGridTextColumn Header="SIZE" Binding="{Binding SizeText}" Width="80"/>
+            </DataGrid.Columns>
+        </DataGrid>
+    </DockPanel>
+</Window>

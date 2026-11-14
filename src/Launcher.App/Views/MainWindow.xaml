@@ -179,6 +179,10 @@
                                     <MenuItem Header="Sign In to Perforce…" Command="{Binding LoginCommand}"
                                               ToolTip="Sign in now and optionally remember the password for automatic sign-in"/>
                                     <Separator/>
+                                    <MenuItem Header="Shelves…" Command="{Binding ShowShelvesCommand}" ToolTip="Changes kept on the server without submitting"/>
+                                    <MenuItem Header="Labels…" Command="{Binding ShowLabelsCommand}" ToolTip="Releases and stable builds: sync the workspace to a label"/>
+                                    <MenuItem Header="Clean Up Disk…" Command="{Binding ShowCleanupCommand}" ToolTip="Delete Intermediate, DerivedDataCache and other generated folders"/>
+                                    <Separator/>
                                     <MenuItem Header="Remove Project…" Command="{Binding RemoveProfileCommand}"/>
                                 </ContextMenu>
                             </Button.ContextMenu>
@@ -489,6 +493,13 @@
                                         </TextBlock>
                                     </DockPanel>
                                 </Border>
+                                <Border DockPanel.Dock="Top" Margin="0,0,0,10" Padding="14,8,12,8" CornerRadius="10" Background="#14F5B547" BorderBrush="#59F5B547" BorderThickness="1"
+                                        Visibility="{Binding HasShared, Converter={StaticResource BoolToVis}}">
+                                    <DockPanel>
+                                        <TextBlock DockPanel.Dock="Left" Text="&#xE716;" Style="{StaticResource Glyph}" FontSize="14" Foreground="{StaticResource Warn}" Margin="0,0,12,0" VerticalAlignment="Center"/>
+                                        <TextBlock Text="{Binding SharedText}" VerticalAlignment="Center" TextWrapping="Wrap" Foreground="{StaticResource TextSecondary}"/>
+                                    </DockPanel>
+                                </Border>
                                 <WrapPanel DockPanel.Dock="Top">
                                     <WrapPanel.Resources>
                                         <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
@@ -525,6 +536,13 @@
                                                           CommandParameter="{Binding PlacementTarget.SelectedItem.File.LocalPath, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
                                                 <MenuItem Header="Copy Depot Path" Command="{Binding CopyCommand}"
                                                           CommandParameter="{Binding PlacementTarget.SelectedItem.File.DepotPath, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                                <Separator/>
+                                                <MenuItem Header="Compare With Depot Version" Command="{Binding DiffPendingCommand}"
+                                                          CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                                <MenuItem Header="File History…" Command="{Binding FileHistoryCommand}"
+                                                          CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                                <MenuItem Header="Lock" Command="{Binding LockFilesCommand}" ToolTip="Nobody else can edit these files until you submit or unlock"/>
+                                                <MenuItem Header="Unlock" Command="{Binding UnlockFilesCommand}"/>
                                                 <Separator/>
                                                 <MenuItem Header="Revert…" Command="{Binding RevertCommand}"/>
                                             </ContextMenu>
@@ -628,7 +646,7 @@
                                                     </Style>
                                                 </DataGridTextColumn.ElementStyle>
                                             </DataGridTextColumn>
-                                            <DataGridTextColumn Header="ACTION" Binding="{Binding Action}" Width="90"/>
+                                            <DataGridTextColumn Header="ACTION" Binding="{Binding ActionText}" Width="110"/>
                                             <DataGridTextColumn Header="FILE" Binding="{Binding DisplayPath}" Width="*">
                                                 <DataGridTextColumn.ElementStyle>
                                                     <Style TargetType="TextBlock">
@@ -638,6 +656,14 @@
                                                                 <Setter Property="ToolTip" Value="{Binding MarkerTip}"/>
                                                             </DataTrigger>
                                                         </Style.Triggers>
+                                                    </Style>
+                                                </DataGridTextColumn.ElementStyle>
+                                            </DataGridTextColumn>
+                                            <DataGridTextColumn Header="ALSO OPEN BY" Binding="{Binding SharedWith}" Width="140">
+                                                <DataGridTextColumn.ElementStyle>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Foreground" Value="{StaticResource Warn}"/>
+                                                        <Setter Property="ToolTip" Value="Somebody else has this file open too: agree who submits first"/>
                                                     </Style>
                                                 </DataGridTextColumn.ElementStyle>
                                             </DataGridTextColumn>
@@ -782,6 +808,11 @@
                                                                                                                     <ContextMenu>
                                                                                                                         <MenuItem Header="Copy Depot Path" Command="{Binding CopyPathCommand}"/>
                                                                                                                         <MenuItem Header="Copy File Name" Command="{Binding CopyNameCommand}"/>
+                                                                                                                        <Separator/>
+                                                                                                                        <MenuItem Header="File History…" Command="{Binding HistoryCommand}"/>
+                                                                                                                        <MenuItem Header="{Binding WatchText}" Command="{Binding WatchCommand}"
+                                                                                                                                  Visibility="{Binding CanWatch, Converter={StaticResource BoolToVis}}"
+                                                                                                                                  ToolTip="Get a notification when nobody else has this file checked out"/>
                                                                                                                     </ContextMenu>
                                                                                                                 </Border.ContextMenu>
                                                                                                                 <Grid ToolTip="{Binding DepotPath}">
@@ -928,6 +959,11 @@
                                             <DataGrid.ContextMenu>
                                                 <ContextMenu>
                                                     <MenuItem Header="Copy Depot Path" Command="{Binding CopyCommand}"
+                                                              CommandParameter="{Binding PlacementTarget.SelectedItem.DepotPath, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                                    <Separator/>
+                                                    <MenuItem Header="Compare With Previous Revision" Command="{Binding DiffChangeFileCommand}"
+                                                              CommandParameter="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                                    <MenuItem Header="File History…" Command="{Binding FileHistoryCommand}"
                                                               CommandParameter="{Binding PlacementTarget.SelectedItem.DepotPath, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
                                                 </ContextMenu>
                                             </DataGrid.ContextMenu>

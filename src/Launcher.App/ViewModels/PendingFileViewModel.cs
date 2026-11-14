@@ -45,7 +45,7 @@ public sealed class ChangelistHeaderViewModel : ObservableObject
 }
 
 /// <summary>Строка вкладки Pending changes: открытый файл либо заглушка «(empty)» пустого changelist'а.</summary>
-public sealed class PendingFileViewModel
+public sealed class PendingFileViewModel : ObservableObject
 {
     public PendingFileViewModel(ChangelistHeaderViewModel header, OpenedFile? file, string displayPath)
     {
@@ -60,6 +60,11 @@ public sealed class PendingFileViewModel
     public OpenedFile? File { get; }
     public bool IsPlaceholder => File == null;
     public string Action => File?.Action ?? "";
+    /// <summary>Действие с пометкой блокировки: «edit (locked)».</summary>
+    public string ActionText => File == null ? "" : File.IsLocked ? $"{File.Action} (locked)" : File.Action;
+    private string _sharedWith = "";
+    /// <summary>Другие пользователи, у которых этот файл тоже открыт (пусто — только у вас).</summary>
+    public string SharedWith { get => _sharedWith; set => Set(ref _sharedWith, value); }
     public string Type => File?.Type ?? "";
     public string DisplayPath { get; }
 

@@ -26,6 +26,10 @@ public interface IDialogService
     bool Confirm(string message);
     /// <summary>Окно Resolve (модальное): конфликты после sync.</summary>
     void ShowResolve(ResolveViewModel vm);
+    /// <summary>Модальное окно инструмента по типу его view model (история файла, shelves, метки, очистка, ошибки сборки).</summary>
+    void ShowDialog(object viewModel);
+    /// <summary>Последние описания и шаблоны для окна описания коммита.</summary>
+    PerforceLauncher.App.Infrastructure.DescriptionBook? DescriptionBook { get; set; }
     /// <summary>Выбор из нескольких кнопок (первая — основная, последняя — отмена). Индекс кнопки или -1.</summary>
     int Choose(string title, string message, params string[] buttons);
     void Error(string message);
@@ -34,7 +38,7 @@ public interface IDialogService
     string? PromptText(string title, string caption, string initial, string okText, bool requireEnglish = false);
 }
 
-public sealed class MainViewModel : ObservableObject
+public sealed partial class MainViewModel : ObservableObject
 {
     private readonly AppSettings _settings;
     private readonly SettingsStore _store;
@@ -306,6 +310,7 @@ public sealed class MainViewModel : ObservableObject
 
         HistoryView = CollectionViewSource.GetDefaultView(_history);
         HistoryView.Filter = o => o is HistoryEntry h && h.Matches(_historyFilter.Trim());
+        InitTools();
         ToggleActivityCommand = new RelayCommand(_ => ShowActivity = !ShowActivity);
         RefreshActivityCommand = new AsyncRelayCommand(_ => LoadActivityAsync(force: true), _ => Selected != null && !Activity.IsBusy);
         ResolveCommand = new AsyncRelayCommand(_ => OpenResolveAsync(), _ => Selected != null && !IsBusy);
@@ -739,11 +744,16 @@ public sealed class MainViewModel : ObservableObject
 
         var ok = false;
         string? failure = null;
+        var issues = new List<BuildIssue>();
         await RunBusyAsync($"Building {name}…", cancellable: true, async ct =>
         {
             Output = "";
             AppendOutput($"> Build {plan.Target} Win64 Development ({System.IO.Path.GetFileName(plan.UProject)})");
-            var lines = new Progress<string>(AppendOutput);
+            var lines = new Progress<string>(line =>
+            {
+                AppendOutput(line);
+                if (BuildIssueParser.TryParse(line) is { } issue) lock (issues) issues.Add(issue);
+            });
             var steps = new Progress<(int Done, int Total)>(s => BusyText = $"Building {name}… {s.Done}/{s.Total}");
             var sw = Stopwatch.StartNew();
             try
@@ -767,7 +777,12 @@ public sealed class MainViewModel : ObservableObject
         else if (failure != null)
         {
             if (!IsWindowShown()) _notifier.Notify($"{name}: build failed", "Open the launcher to see the compiler output.", profile.Id);
-            _dialogs.Error($"{name}: build failed.\n\nThe compiler output is in Activity (errors are near the end).");
+            List<BuildIssue> found;
+            lock (issues) found = issues.ToList();
+            if (found.Any(i => i.Severity == BuildSeverity.Error))
+                _dialogs.ShowDialog(new BuildIssuesViewModel($"{name}: build failed", found, profile, _dialogs, CopyToClipboard));
+            else
+                _dialogs.Error($"{name}: build failed.\n\nThe compiler output is in Activity (errors are near the end).");
         }
         return ok;
     }
@@ -930,6 +945,7 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(HasUnresolved));
         OnPropertyChanged(nameof(UnresolvedText));
         UpdateHint();
+        SharedAfterPendingRefresh();
     }
 
     /// <summary>Окно Resolve для выбранного проекта; после закрытия список Pending и подсказки обновляются.</summary>
@@ -1092,6 +1108,16 @@ public sealed class MainViewModel : ObservableObject
             if (!proceed) return;
         }
 
+        // Частые ошибки: сгенерированные и огромные файлы. Решает пользователь (по умолчанию «No»).
+        var warnings = SubmitChecks.Evaluate(vm.Model.WorkspaceRoot, cl.Files);
+        if (warnings.Count > 0)
+        {
+            var shown = string.Join(Environment.NewLine, warnings.Take(8).Select(w => "  " + w));
+            var rest = warnings.Count > 8 ? $"{Environment.NewLine}  ...and {warnings.Count - 8} more" : "";
+            if (!_dialogs.Confirm($"Check these files before submitting:{Environment.NewLine}{Environment.NewLine}{shown}{rest}{Environment.NewLine}{Environment.NewLine}" +
+                                  $"They are usually local or generated and should not go to the depot.{Environment.NewLine}Submit anyway?")) return;
+        }
+
         var caption = $"Submit {cl.Files.Count} file(s) from {cl.Title} to {vm.Subtitle}. Description:";
         var desc = _dialogs.PromptText("Submit", caption, cl.Description, "Submit", requireEnglish: true);
         if (string.IsNullOrWhiteSpace(desc)) return;
@@ -1135,6 +1161,7 @@ public sealed class MainViewModel : ObservableObject
             await RunBusyAsync($"Submitting CL {id}…", cancellable: false,
                 _ => _vcs.SubmitAsync(profile, id, new Progress<string>(AppendOutput)));
             AppendOutput("Submit finished.");
+            Book.Remember(desc);
             _notifier.Notify("Submitted", $"{cl.Files.Count} file(s) submitted in CL {id}.", profile.Id);
         }
         finally
@@ -1270,6 +1297,7 @@ public sealed class MainViewModel : ObservableObject
             CheckoutSummary = files.Count == 0 ? "" :
                 $"{files.Count} file{(files.Count == 1 ? "" : "s")} · {people} {(people == 1 ? "person" : "people")}" + (locked > 0 ? $" · {locked} locked" : "");
             ApplyCheckoutFilter();
+            AfterCheckoutsLoaded();
         }
         catch (Exception ex)
         {
@@ -1307,7 +1335,8 @@ public sealed class MainViewModel : ObservableObject
                      .OrderByDescending(g => IsMe(g.Key)).ThenByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
         {
             var rows = g.OrderBy(f => CheckoutRank(f.DepotPath)).ThenBy(f => f.DepotPath, StringComparer.OrdinalIgnoreCase)
-                .Select(f => new CheckoutFileViewModel(f, FolderOf(f.DepotPath, strip), CopyToClipboard)).ToList();
+                .Select(f => new CheckoutFileViewModel(f, FolderOf(f.DepotPath, strip), CopyToClipboard,
+                    d => _ = OpenFileHistoryAsync(d), ToggleWatch, IsMe(f.User), IsWatched(f.DepotPath))).ToList();
             var expanded = filtering || (_checkoutExpanded.TryGetValue(g.Key, out var remembered) ? remembered : expandByDefault);
             var group = new UserCheckoutViewModel(g.Key, IsMe(g.Key), rows, expanded, CopyToClipboard);
             var user = g.Key;
